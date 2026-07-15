@@ -1,0 +1,25 @@
+{
+  "name": "synaplan-owncloud-online",
+  "version": "1.0.0",
+  "description": "Synaplan AI Integration for owncloud.online — frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "check-types": "vue-tsc --noEmit",
+    "lint": "eslint src --ext .ts,.vue",
+    "format": "prettier --write src"
+  },
+  "dependencies": {
+    "marked": "^12.0.0",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vite-plugin-css-injected-by-js": "^3.5.0",
+    "vue-tsc": "^2.0.0"
+  }
+}

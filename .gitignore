@@ -1,0 +1,19 @@
+# Dependencies
+/node_modules/
+/vendor/
+
+# Build / release artifacts
+*.tar.gz
+*.tar.gz.sig
+/release-work/build/
+
+# Tooling caches
+.php-cs-fixer.cache
+.phpunit.cache/
+*.log
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

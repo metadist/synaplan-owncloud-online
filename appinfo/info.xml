@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  ~ Synaplan Integration for owncloud.online
+  ~ @copyright Copyright (c) 2026, Synaplan
+  ~ @license Apache-2.0
+-->
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.owncloud.com/schema/apps/info.xsd">
+	<id>oco_synaplan</id>
+	<name>Synaplan Integration</name>
+	<summary>AI-powered document summarization, translation, knowledge base, and chat</summary>
+	<description>
+Bring Synaplan's AI capabilities directly into owncloud.online:
+
+- Summarize documents with one click
+- Translate files to multiple languages
+- Add to Knowledge — vectorize files into the AI knowledge base
+- Research Chat — AI assistant with knowledge group and model selection,
+  optional personal memories, and live status (model, language, image/video)
+- Configurable answer language — set a default and optionally follow each
+  user's interface language
+- Optional per-user Synaplan accounts with an "Activate AI" consent gate
+
+Requires a running Synaplan instance and API key.
+	</description>
+	<version>1.0.0</version>
+	<licence>Apache-2.0</licence>
+	<author mail="info@synaplan.com" homepage="https://synaplan.com">Synaplan</author>
+	<namespace>OcoSynaplan</namespace>
+	<category>integration</category>
+	<category>tools</category>
+	<website>https://synaplan.com</website>
+	<bugs>https://github.com/metadist/synaplan-owncloud-online/issues</bugs>
+	<repository type="git">https://github.com/metadist/synaplan-owncloud-online.git</repository>
+	<dependencies>
+		<php min-version="8.1"/>
+		<owncloud min-version="10" max-version="11"/>
+	</dependencies>
+	<settings>
+		<admin>OCA\OcoSynaplan\Settings\Admin</admin>
+	</settings>
+	<settings-sections>
+		<admin>OCA\OcoSynaplan\Settings\Section</admin>
+	</settings-sections>
+	<navigation>
+		<name>Synaplan</name>
+		<route>oco_synaplan.page.research</route>
+		<icon>app.svg</icon>
+		<order>80</order>
+	</navigation>
+</info>
