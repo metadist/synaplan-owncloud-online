@@ -20,7 +20,7 @@ use OCP\ILogger;
  * HTTP client for the Synaplan API.
  *
  * Uses X-API-Key authentication for all requests.
- * No ownCloud-specific business logic — only HTTP transport.
+ * No ownCloud.online-specific business logic — only HTTP transport.
  */
 class SynaplanClient
 {
@@ -271,7 +271,7 @@ class SynaplanClient
     }
 
     /**
-     * Bulk-check which ownCloud-sourced files drifted.
+     * Bulk-check which ownCloud.online-sourced files drifted.
      *
      * @param array<int, array{source_id: string, source_etag?: string|null}> $items
      * @return array<string, mixed>
@@ -286,7 +286,7 @@ class SynaplanClient
     }
 
     /**
-     * Knowledge-base status for a single ownCloud file, derived from
+     * Knowledge-base status for a single ownCloud.online file, derived from
      * check-stale: whether it is already vectorized, whether it drifted since,
      * and the Synaplan file id (needed to remove it).
      *
@@ -327,11 +327,11 @@ class SynaplanClient
      * @param string      $content      File binary content
      * @param string      $groupKey     Target group key for vectorization
      * @param string      $processLevel store|extract|vectorize|full
-     * @param string|null $originalName Source-side name (e.g. ownCloud path/basename),
+     * @param string|null $originalName Source-side name (e.g. ownCloud.online path/basename),
      *                                  preserved as provenance. Defaults to $filename.
-     * @param string|null $sourceId     Stable external id (the ownCloud file id) so the
+     * @param string|null $sourceId     Stable external id (the ownCloud.online file id) so the
      *                                  same file can be overwritten in place and tracked.
-     * @param string|null $sourceEtag   ownCloud etag captured at upload; a later change
+     * @param string|null $sourceEtag   ownCloud.online etag captured at upload; a later change
      *                                  marks the knowledge copy stale.
      * @param bool        $overwrite    Replace the existing knowledge file for this
      *                                  (source, source_id) instead of creating a duplicate.
@@ -516,7 +516,7 @@ class SynaplanClient
     /**
      * The API key to use for the CURRENT request.
      *
-     * In per-user mode this is the logged-in ownCloud user's own Synaplan key
+     * In per-user mode this is the logged-in ownCloud.online user's own Synaplan key
      * (provisioned + minted on first use, AFTER the user activates AI). If the
      * user has no key yet an EMPTY key is returned on purpose: the request then
      * fails (401) rather than silently falling back to the shared admin key,
@@ -596,7 +596,7 @@ class SynaplanClient
     }
 
     /**
-     * Best-effort detection of an HTTP 401 from the ownCloud HTTP client
+     * Best-effort detection of an HTTP 401 from the ownCloud.online HTTP client
      * exception (the underlying Guzzle exception message carries the status).
      */
     private function isUnauthorized(\Exception $e): bool

@@ -20,7 +20,7 @@ use OCP\IUserSession;
  *
  * Two admin-configurable inputs drive the result:
  *  - default_language:        fallback language code (ISO 639-1, e.g. "de").
- *  - use_interface_language:  when enabled, the signed-in user's ownCloud
+ *  - use_interface_language:  when enabled, the signed-in user's ownCloud.online
  *                             interface language wins over the default — so a
  *                             German user gets German answers automatically,
  *                             while a French colleague gets French, without any

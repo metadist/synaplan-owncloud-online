@@ -1,9 +1,8 @@
 /**
- * Thin helpers over ownCloud's global JS API.
+ * Thin helpers over ownCloud.online's global JS API.
  *
- * These replace the @nextcloud/* packages the Nextcloud app used
- * (@nextcloud/router, @nextcloud/axios, @nextcloud/dialogs, @nextcloud/l10n)
- * with the equivalents ownCloud 10 ships on the global OC / OCA objects.
+ * These use the router, HTTP, dialog and l10n equivalents that ownCloud.online
+ * ships on the global OC / OCA objects.
  */
 
 export const APP_ID = 'oco_synaplan'
@@ -37,7 +36,7 @@ export interface RequestOptions {
 }
 
 /**
- * Fetch JSON from an app endpoint with ownCloud's CSRF token attached.
+ * Fetch JSON from an app endpoint with ownCloud.online's CSRF token attached.
  * Throws on a non-2xx response, surfacing the server's error message.
  */
 export async function apiFetch<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {

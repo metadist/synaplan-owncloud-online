@@ -22,10 +22,10 @@ use OCP\ILogger;
  * Streams Synaplan's OpenAI-compatible SSE chat response straight to the
  * browser, chunk by chunk, using a direct cURL transfer.
  *
- * Why cURL instead of the ownCloud HTTP client: with the buffered client the
+ * Why cURL instead of the ownCloud.online HTTP client: with the buffered client the
  * upstream body was only handed over once complete, so the answer arrived all
  * at once. cURL's write callback hands us each network chunk the instant it
- * arrives, and we echo + flush it immediately, defeating PHP/ownCloud output
+ * arrives, and we echo + flush it immediately, defeating PHP/ownCloud.online output
  * buffering so the answer truly streams token by token.
  */
 class SseProxyResponse extends Response implements ICallbackResponse
@@ -41,7 +41,7 @@ class SseProxyResponse extends Response implements ICallbackResponse
         private string $payload,
         private ILogger $logger,
     ) {
-        // ownCloud 10's OCP\AppFramework\Http\Response has no constructor, so we
+        // ownCloud.online's OCP\AppFramework\Http\Response has no constructor, so we
         // must NOT call parent::__construct() here (it fatals "Cannot call
         // constructor"). Property defaults on the base class are already set.
         $this->setStatus(Http::STATUS_OK);

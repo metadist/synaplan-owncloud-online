@@ -24,7 +24,7 @@ use OCP\IRequest;
 use OCP\IUserSession;
 
 /**
- * Controller for media generation (image/video) and saving to ownCloud.
+ * Controller for media generation (image/video) and saving to ownCloud.online.
  */
 class MediaController extends Controller
 {
@@ -110,7 +110,7 @@ class MediaController extends Controller
     }
 
     /**
-     * Download generated media from Synaplan and save it to the user's ownCloud files.
+     * Download generated media from Synaplan and save it to the user's ownCloud.online files.
      *
      * @NoAdminRequired
      */
@@ -180,7 +180,7 @@ class MediaController extends Controller
     }
 
     /**
-     * Proxy a Synaplan media file through the ownCloud server.
+     * Proxy a Synaplan media file through the ownCloud.online server.
      *
      * @NoAdminRequired
      * @NoCSRFRequired

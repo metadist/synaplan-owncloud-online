@@ -1,7 +1,7 @@
 /**
  * Mount a Vue component inside a lightweight modal overlay.
  *
- * Replaces @nextcloud/vue's NcDialog/NcModal (unavailable on ownCloud 10). The
+ * A lightweight dialog/modal for ownCloud.online. The
  * overlay + backdrop are created in plain DOM; the component is mounted into
  * the panel and receives an `onClose` prop plus any extra props. Returns a
  * close() handle. Styling is injected once via injectModalStyles().

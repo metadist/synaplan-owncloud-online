@@ -16,8 +16,8 @@ use OCP\IConfig;
 use OCP\IUserManager;
 
 /**
- * Admin-facing view of which ownCloud users have activated AI and how to
- * manage them (the "control panel" cross-link: ownCloud user <-> Synaplan account).
+ * Admin-facing view of which ownCloud.online users have activated AI and how to
+ * manage them (the "control panel" cross-link: ownCloud.online user <-> Synaplan account).
  */
 class AdminAiUsersService
 {
@@ -29,7 +29,7 @@ class AdminAiUsersService
     }
 
     /**
-     * List every ownCloud user who has activated AI (granted consent).
+     * List every ownCloud.online user who has activated AI (granted consent).
      *
      * Efficient at scale: queries only the users who hold the consent flag
      * (getUsersForUserValue), never the full user base.

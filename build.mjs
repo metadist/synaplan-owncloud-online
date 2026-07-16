@@ -1,10 +1,10 @@
 /**
  * Build each frontend entry as a self-contained IIFE bundle in js/.
  *
- * ownCloud 10 loads app scripts as classic <script> tags via Util::addScript,
+ * ownCloud.online loads app scripts as classic <script> tags via Util::addScript,
  * not ES modules, so we cannot ship a code-split ESM bundle. Instead we build
  * one standalone IIFE per entry (Vue is bundled in each) and inject component
- * CSS through JS, since ownCloud's addScript only pulls the .js file.
+ * CSS through JS, since ownCloud.online's addScript only pulls the .js file.
  */
 import { build } from 'vite'
 import vue from '@vitejs/plugin-vue'

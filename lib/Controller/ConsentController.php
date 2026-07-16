@@ -21,7 +21,7 @@ use OCP\IRequest;
  * Per-user "Activate AI" consent.
  *
  * In per-user mode, using AI provisions a personal account on the Synaplan
- * server for the ownCloud user. We do not create that external account
+ * server for the ownCloud.online user. We do not create that external account
  * silently — the user must activate AI once.
  */
 class ConsentController extends Controller

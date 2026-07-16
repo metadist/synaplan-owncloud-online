@@ -19,11 +19,10 @@ use OCP\Util;
 /**
  * Admin settings panel for Synaplan Integration.
  *
- * Renders inside the "Synaplan" admin section (see {@see Section}). ownCloud's
- * ISettings differs from Nextcloud's: it exposes getPanel() (not getForm()) and
- * getSectionID() (not getSection()). The settings page fetches the panel via
- * Template::fetchPage(), so we return a raw Template (as core apps do) to embed
- * only the partial rather than a full page.
+ * Renders inside the "Synaplan" admin section (see {@see Section}).
+ * ownCloud.online's ISettings exposes getPanel() and getSectionID(). The
+ * settings page fetches the panel via Template::fetchPage(), so we return a raw
+ * Template (as core apps do) to embed only the partial rather than a full page.
  */
 class Admin implements ISettings
 {

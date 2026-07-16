@@ -19,16 +19,16 @@ use OCP\IUser;
 use OCP\IUserSession;
 
 /**
- * Resolves a per-user Synaplan API key for the current ownCloud user.
+ * Resolves a per-user Synaplan API key for the current ownCloud.online user.
  *
  * On first use for a user, this service uses the admin API key to:
- *   1. provision a Synaplan account for the ownCloud user (idempotent on
+ *   1. provision a Synaplan account for the ownCloud.online user (idempotent on
  *      source="owncloud" + external_id="<instanceId>:<uid>"), and
  *   2. mint a per-user API key on that account.
  *
- * The minted key is cached in the ownCloud user's preferences (server-side
+ * The minted key is cached in the ownCloud.online user's preferences (server-side
  * only, never exposed to the browser). All subsequent Synaplan calls made on
- * behalf of that user carry the per-user key, so each ownCloud user acts ONLY
+ * behalf of that user carry the per-user key, so each ownCloud.online user acts ONLY
  * on their own Synaplan account (isolated knowledge base, memories, usage).
  *
  * Deliberately talks to Synaplan's admin API directly via IClientService (not
@@ -182,7 +182,7 @@ class UserAccountService
     // ---- Admin operations on arbitrary users (used by the admin panel) ----
 
     /**
-     * The Synaplan account id provisioned for a given ownCloud user, if any.
+     * The Synaplan account id provisioned for a given ownCloud.online user, if any.
      */
     public function getSynaplanUserId(string $uid): ?int
     {
@@ -212,9 +212,9 @@ class UserAccountService
     /**
      * Delete a user's Synaplan account (and its data) via the admin API.
      *
-     * Called when the ownCloud user is removed so the external account does
+     * Called when the ownCloud.online user is removed so the external account does
      * not linger orphaned. Best-effort: failures are logged, never thrown, so
-     * they can't block ownCloud's own user deletion.
+     * they can't block ownCloud.online's own user deletion.
      */
     public function deleteRemoteAccount(string $uid): void
     {
@@ -226,13 +226,13 @@ class UserAccountService
 
         try {
             $this->adminRequest('DELETE', '/api/v1/admin/users/' . $synaplanUserId, null, $adminKey);
-            $this->logger->info('Deleted Synaplan account for removed ownCloud user {uid} (synaplan id {sid})', [
+            $this->logger->info('Deleted Synaplan account for removed ownCloud.online user {uid} (synaplan id {sid})', [
                 'app' => Application::APP_ID,
                 'uid' => $uid,
                 'sid' => $synaplanUserId,
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to delete Synaplan account for removed ownCloud user {uid}: {message}', [
+            $this->logger->error('Failed to delete Synaplan account for removed ownCloud.online user {uid}: {message}', [
                 'app' => Application::APP_ID,
                 'uid' => $uid,
                 'message' => $e->getMessage(),
@@ -270,7 +270,7 @@ class UserAccountService
         $email = $user->getEMailAddress();
         if ($email === null || $email === '') {
             // Synaplan requires an email; synthesize a stable, unique one from
-            // the ownCloud uid + instance when the user has none set.
+            // the ownCloud.online uid + instance when the user has none set.
             $email = $user->getUID() . '@' . $this->synaplanConfig->getInstanceId() . '.owncloud.local';
         }
 

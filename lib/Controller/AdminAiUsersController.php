@@ -18,7 +18,7 @@ use OCP\AppFramework\Http\JSONResponse;
 use OCP\IRequest;
 
 /**
- * Admin control panel: which ownCloud users have activated AI, their Synaplan
+ * Admin control panel: which ownCloud.online users have activated AI, their Synaplan
  * account + usage, and the ability to deactivate a user.
  *
  * All methods are admin-only (no @NoAdminRequired), matching SettingsController.

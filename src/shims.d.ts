@@ -1,7 +1,7 @@
 /**
- * Ambient declarations for ownCloud's global JS API and Vue SFC imports.
+ * Ambient declarations for ownCloud.online's global JS API and Vue SFC imports.
  *
- * ownCloud 10 exposes OC / OCA / t on the global scope (loaded before our
+ * ownCloud.online exposes OC / OCA / t on the global scope (loaded before our
  * scripts). We type only the members we use.
  */
 
@@ -19,7 +19,7 @@ interface OcFileAction {
   order?: number
   iconClass?: string
   icon?: string | (() => string)
-  // context shape varies across ownCloud 10 point releases; kept loose on purpose.
+  // context shape varies across ownCloud.online point releases; kept loose on purpose.
   actionHandler: (fileName: string, context: any) => void
 }
 
@@ -54,7 +54,7 @@ interface OcaGlobal {
 declare global {
   const OC: OcGlobal
   const OCA: OcaGlobal
-  // ownCloud translation helper. Falls back to identity when absent.
+  // ownCloud.online translation helper. Falls back to identity when absent.
   function t(app: string, text: string, vars?: Record<string, unknown>): string
   interface Window {
     OC: OcGlobal

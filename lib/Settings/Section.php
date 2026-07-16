@@ -18,7 +18,7 @@ use OCP\Settings\ISection;
  * Admin settings section for Synaplan Integration.
  *
  * Creates a "Synaplan" entry in the admin settings sidebar. Registered via
- * info.xml's <settings-sections> so ownCloud can discover it. getIconName()
+ * info.xml's <settings-sections> so ownCloud.online can discover it. getIconName()
  * returns "app", which resolves to img/app.svg in this app.
  */
 class Section implements ISection

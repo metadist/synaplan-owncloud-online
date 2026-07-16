@@ -1,7 +1,7 @@
 .PHONY: help build dev lint lint-php lint-js check-types deps clean package link unlink
 
 app_name := oco_synaplan
-# Override with: make link OC_APPS=/path/to/owncloud/apps
+# Override with: make link OC_APPS=/path/to/owncloud.online/apps
 OC_APPS ?= /wwwroot/owncloud.online/apps
 build_dir := release-work/build
 
@@ -36,13 +36,13 @@ lint-js: ## Frontend lint + type check
 check-types: ## Type-check the frontend (vue-tsc)
 	npm run check-types
 
-## Dev install into ownCloud
+## Dev install into ownCloud.online
 
-link: ## Symlink this app into an ownCloud apps dir (OC_APPS=...)
+link: ## Symlink this app into an ownCloud.online apps dir (OC_APPS=...)
 	ln -sfn $(CURDIR) $(OC_APPS)/$(app_name)
 	@echo "Linked into $(OC_APPS)/$(app_name) — enable with: occ app:enable $(app_name)"
 
-unlink: ## Remove the symlink from the ownCloud apps dir
+unlink: ## Remove the symlink from the ownCloud.online apps dir
 	rm -f $(OC_APPS)/$(app_name)
 
 ## Release

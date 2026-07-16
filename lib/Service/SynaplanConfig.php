@@ -73,7 +73,7 @@ class SynaplanConfig
     }
 
     /**
-     * When enabled, each ownCloud user gets their own Synaplan account and
+     * When enabled, each ownCloud.online user gets their own Synaplan account and
      * per-user API key (isolated knowledge base, memories, usage). When
      * disabled (default, backward-compatible), all traffic uses the single
      * install-wide key.
@@ -84,8 +84,8 @@ class SynaplanConfig
     }
 
     /**
-     * Stable identifier for THIS ownCloud instance — used to namespace the
-     * external_id sent to Synaplan so two ownCloud installs pointing at the
+     * Stable identifier for THIS ownCloud.online instance — used to namespace the
+     * external_id sent to Synaplan so two ownCloud.online installs pointing at the
      * same Synaplan never collide.
      */
     public function getInstanceId(): string

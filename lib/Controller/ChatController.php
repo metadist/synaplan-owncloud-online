@@ -51,7 +51,7 @@ class ChatController extends Controller
      * @NoAdminRequired
      *
      * @param string      $message     User's question
-     * @param int|null    $fileId      ownCloud file ID for document context
+     * @param int|null    $fileId      ownCloud.online file ID for document context
      * @param string|null $groupKey    RAG group key for knowledge base context
      * @param int|null    $modelId     Specific model ID to use
      * @param bool        $useMemories Whether to enrich the answer with the user's memories
@@ -124,7 +124,7 @@ class ChatController extends Controller
      * @NoAdminRequired
      *
      * @param string      $message     User's question
-     * @param int|null    $fileId      ownCloud file ID for document context
+     * @param int|null    $fileId      ownCloud.online file ID for document context
      * @param string|null $groupKey    RAG group key for knowledge base context
      * @param string|null $model       Provider model id/name (null = user default)
      * @param bool        $useMemories Whether to enrich the answer with the user's memories

@@ -16,7 +16,7 @@ use OCP\AppFramework\App;
 /**
  * App container.
  *
- * ownCloud 10's dependency-injection container resolves controller and service
+ * ownCloud.online's dependency-injection container resolves controller and service
  * constructor dependencies by type-hint via reflection, so we do not register
  * services explicitly here — every dependency is either an OCP interface bound
  * in the server container or an app class the container can build itself.

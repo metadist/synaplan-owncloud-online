@@ -31,7 +31,7 @@ use OCP\IUserSession;
  * API controller for document AI operations.
  *
  * Provides summarization, translation and knowledge-base management of
- * ownCloud files via the Synaplan API.
+ * ownCloud.online files via the Synaplan API.
  */
 class ApiController extends Controller
 {
@@ -116,7 +116,7 @@ class ApiController extends Controller
      *
      * @NoAdminRequired
      *
-     * @param int    $fileId         ownCloud file ID
+     * @param int    $fileId         ownCloud.online file ID
      * @param string $summaryType    bullet-points|abstractive|extractive
      * @param string $length         short|medium|long
      * @param string $outputLanguage ISO language code (en, de, fr, es, it)
@@ -161,7 +161,7 @@ class ApiController extends Controller
      *
      * @NoAdminRequired
      *
-     * @param int    $fileId         ownCloud file ID
+     * @param int    $fileId         ownCloud.online file ID
      * @param string $targetLanguage ISO language code (en, de, fr, es, it)
      */
     public function translate(int $fileId, string $targetLanguage = ''): JSONResponse
@@ -196,11 +196,11 @@ class ApiController extends Controller
     }
 
     /**
-     * Upload an ownCloud file to the Synaplan knowledge base.
+     * Upload an ownCloud.online file to the Synaplan knowledge base.
      *
      * @NoAdminRequired
      *
-     * @param int    $fileId   ownCloud file ID
+     * @param int    $fileId   ownCloud.online file ID
      * @param string $groupKey Target group key for vectorization
      */
     public function uploadToKnowledge(int $fileId, string $groupKey = 'DEFAULT'): JSONResponse
@@ -234,7 +234,7 @@ class ApiController extends Controller
             $filename = $node->getName();
             $originalName = $userFolder->getRelativePath($node->getPath()) ?? $filename;
 
-            // Key the knowledge entry on the ownCloud file id + etag and always
+            // Key the knowledge entry on the ownCloud.online file id + etag and always
             // overwrite, so re-adding (or adding a changed) file updates its
             // entry in place instead of creating a duplicate.
             $result = $this->synaplanClient->uploadFile(
@@ -276,11 +276,11 @@ class ApiController extends Controller
     }
 
     /**
-     * Knowledge-base status for an ownCloud file.
+     * Knowledge-base status for an ownCloud.online file.
      *
      * @NoAdminRequired
      *
-     * @param int $fileId ownCloud file ID
+     * @param int $fileId ownCloud.online file ID
      */
     public function knowledgeStatus(int $fileId): JSONResponse
     {
@@ -316,11 +316,11 @@ class ApiController extends Controller
     }
 
     /**
-     * Remove an ownCloud file from the Synaplan knowledge base.
+     * Remove an ownCloud.online file from the Synaplan knowledge base.
      *
      * @NoAdminRequired
      *
-     * @param int $fileId ownCloud file ID
+     * @param int $fileId ownCloud.online file ID
      */
     public function removeFromKnowledge(int $fileId): JSONResponse
     {
@@ -438,7 +438,7 @@ class ApiController extends Controller
     }
 
     /**
-     * Extract text content from an ownCloud file.
+     * Extract text content from an ownCloud.online file.
      *
      * For text-based files, reads content directly. For binary documents
      * (PDF, DOCX, etc.), uploads to Synaplan which uses Tika to extract text,
@@ -530,8 +530,8 @@ class ApiController extends Controller
     /**
      * Resolve a file node owned by the current user by its id.
      *
-     * ownCloud's Folder API returns an array from getById(); with $first=true
-     * we take the single match (equivalent to Nextcloud's getFirstNodeById()).
+     * ownCloud.online's Folder API returns an array from getById(); with
+     * $first=true we take the single match.
      *
      * @throws NotFoundException when not authenticated or the id is unknown
      */

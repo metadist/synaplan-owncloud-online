@@ -1,8 +1,7 @@
 /**
- * Registers Synaplan file actions in the ownCloud Files app.
+ * Registers Synaplan file actions in the ownCloud.online Files app.
  *
- * Uses ownCloud 10's legacy OCA.Files.fileActions.registerAction API (the
- * Nextcloud @nextcloud/files registerFileAction does not exist here). Each
+ * Uses ownCloud.online's OCA.Files.fileActions.registerAction API. Each
  * action resolves the file id from the Files list model and opens the matching
  * Vue modal.
  */
@@ -19,7 +18,7 @@ type FileContext = {
   $file?: { data?: (k: string) => unknown }
 }
 
-/** Best-effort resolution of the numeric file id across ownCloud 10 variants. */
+/** Best-effort resolution of the numeric file id across ownCloud.online variants. */
 function resolveFileId(fileName: string, context: FileContext): number | null {
   const model =
     context.fileInfoModel ??
