@@ -1,10 +1,9 @@
-# Synaplan Integration for owncloud.online
+# Synaplan Integration for ownCloud.online
 
 AI-powered document summarization, translation, knowledge base, and research
-chat — directly in [owncloud.online](https://github.com/BWTECH-github/owncloud.online)
-(ownCloud 10.x). This is the ownCloud sibling of
-[`synaplan-nextcloud`](https://github.com/metadist/synaplan-nextcloud) and talks
-to the **same Synaplan backend API**.
+chat — directly in BW-Tech
+[ownCloud.online](https://github.com/BWTECH-github/owncloud.online) 11.0.10. It
+talks to the **Synaplan backend API**.
 
 ## Features
 
@@ -18,13 +17,13 @@ to the **same Synaplan backend API**.
   optional personal memories. `/pic` and `/vid` generate images and videos when
   the corresponding models are configured, with one-click "Save to Files".
 - **Configurable answer language** — set a default and optionally follow each
-  user's ownCloud interface language.
+  user's ownCloud.online interface language.
 - **Per-user Synaplan accounts** — optional mode where each user activates AI
   once (consent gate) and gets an isolated, provisioned Synaplan account/key.
 
 ## Requirements
 
-- ownCloud 10.x (built and tested on owncloud.online, PHP 8.1+)
+- BW-Tech ownCloud.online 11.0.10 (PHP 8.4)
 - A running [Synaplan](https://synaplan.com) instance with a valid API key
 
 ## Installation
@@ -38,16 +37,16 @@ cd synaplan-owncloud-online
 make deps          # composer install + npm install
 make build         # build the frontend bundles into js/
 
-# Symlink into your ownCloud apps dir and enable it
-make link OC_APPS=/path/to/owncloud/apps
-php /path/to/owncloud/occ app:enable oco_synaplan
+# Symlink into your ownCloud.online apps dir and enable it
+make link OC_APPS=/path/to/owncloud.online/apps
+php /path/to/owncloud.online/occ app:enable oco_synaplan
 ```
 
 ### As a packaged app
 
 ```bash
 make package       # produces oco_synaplan.tar.gz
-# extract into <owncloud>/apps/ and run: occ app:enable oco_synaplan
+# extract into <owncloud.online>/apps/ and run: occ app:enable oco_synaplan
 ```
 
 ## Configuration
@@ -69,7 +68,7 @@ make lint          # php-cs-fixer + vue-tsc
 ```
 
 The frontend is built as self-contained IIFE bundles (Vue 3 bundled) because
-ownCloud 10 loads app scripts as classic `<script>` tags. Entry points:
+ownCloud.online loads app scripts as classic `<script>` tags. Entry points:
 
 | Bundle              | Loaded by                          | Purpose                                  |
 | ------------------- | ---------------------------------- | ---------------------------------------- |
@@ -81,13 +80,12 @@ ownCloud 10 loads app scripts as classic `<script>` tags. Entry points:
 ## Architecture
 
 - **PHP** (`lib/`) — controllers, the Synaplan HTTP client, language resolver,
-  per-user account service, SSE stream proxy, and settings panels. The Synaplan
-  API contract is identical to the Nextcloud app, so this layer is a close port.
-- **Frontend** (`src/`) — a Vue 3 UI that uses ownCloud's global `OC`/`OCA`
-  helpers (no `@nextcloud/*` packages) and the legacy `OCA.Files.fileActions`
-  API for context-menu entries.
+  per-user account service, SSE stream proxy, and settings panels.
+- **Frontend** (`src/`) — a Vue 3 UI that uses ownCloud.online's global
+  `OC`/`OCA` helpers and the `OCA.Files.fileActions` API for context-menu
+  entries.
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the ownCloud-vs-Nextcloud platform notes.
+See [`CHANGELOG.md`](CHANGELOG.md) for the ownCloud.online platform notes.
 
 ## License
 

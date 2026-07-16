@@ -6,8 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [1.0.0] - 2026-07-15
 
-Initial release — a port of the Synaplan Nextcloud integration to
-owncloud.online (ownCloud 10.x), sharing the same Synaplan backend API.
+Initial release — the Synaplan integration for BW-Tech ownCloud.online 11.0.10,
+using the Synaplan backend API.
 
 ### Added
 
@@ -24,12 +24,14 @@ owncloud.online (ownCloud 10.x), sharing the same Synaplan backend API.
 - **Per-user Synaplan accounts** with an "Activate AI" consent gate; a per-user
   API key is provisioned + minted on first use and cleaned up on user deletion.
 
-### Platform notes (ownCloud 10 vs Nextcloud)
+### Platform notes (ownCloud.online 11.0.10)
 
-- Bootstrap via `appinfo/app.php` (no `IBootstrap`); scripts injected into the
-  Files app through the `OCA\Files::loadAdditionalScripts` event.
-- Settings use ownCloud's `ISettings`/`ISection` (`getPanel()`/`getSectionID()`),
-  registered via `<settings>` + `<settings-sections>` in `info.xml`.
-- Frontend rewritten without `@nextcloud/vue`: legacy `OCA.Files.fileActions`
-  for context-menu entries and a bundled Vue 3 UI (IIFE bundles) for modals and
-  the chat, using ownCloud's global `OC`/`OCA` helpers.
+- Requires PHP 8.4.
+- Bootstrap via `appinfo/app.php`; scripts injected into the Files app through
+  the `OCA\Files::loadAdditionalScripts` event.
+- Settings use ownCloud.online's `ISettings`/`ISection`
+  (`getPanel()`/`getSectionID()`), registered via `<settings>` +
+  `<settings-sections>` in `info.xml`.
+- Frontend built as bundled Vue 3 UI (IIFE bundles) for modals and the chat,
+  with the `OCA.Files.fileActions` API for context-menu entries, using
+  ownCloud.online's global `OC`/`OCA` helpers.
