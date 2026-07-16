@@ -4,7 +4,7 @@
     "type": "owncloud-app",
     "license": "Apache-2.0",
     "require": {
-        "php": ">=8.1",
+        "php": ">=8.4",
         "ext-curl": "*"
     },
     "require-dev": {
@@ -19,7 +19,7 @@
         "sort-packages": true,
         "optimize-autoloader": true,
         "platform": {
-            "php": "8.1"
+            "php": "8.4"
         }
     },
     "scripts": {
