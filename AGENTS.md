@@ -47,6 +47,10 @@ gate.
   `l10n/{de,de_DE,es,fr,tr}.json` in the same change (`de` is informal,
   `de_DE` formal), without the banned words of the term table in the
   cloud-file-sharing plan (`00_master_plan.md` §11). Copy comes from the plan.
+  `make l10n` writes the browser bundles (`l10n/*.js`) from the `.json`;
+  `tests/unit/l10n/locales.spec.ts` fails on a missing or extra string, a
+  lost placeholder, a banned word, a stale bundle, or a term the plan fixes
+  said another way.
 - Never commit `js/`, tarballs or `.cache/`.
 
 ## Commits

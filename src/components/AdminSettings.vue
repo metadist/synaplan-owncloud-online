@@ -245,7 +245,7 @@ function formatConsentDate(iso: string | null | undefined): string {
     <h2>{{ t('Synaplan Integration') }}</h2>
 
     <div class="synaplan-admin-field">
-      <label for="synaplan-active-env">{{ t('Active backend') }}</label>
+      <label for="synaplan-active-env">{{ t('Active environment') }}</label>
       <select id="synaplan-active-env" v-model="activeEnv">
         <option value="live">{{ t('Live (production)') }}</option>
         <option value="local">{{ t('Local (development)') }}</option>
@@ -253,7 +253,7 @@ function formatConsentDate(iso: string | null | undefined): string {
     </div>
 
     <fieldset>
-      <legend>{{ t('Live backend') }}</legend>
+      <legend>{{ t('Live (production)') }}</legend>
       <div class="synaplan-admin-field">
         <label for="synaplan-url">{{ t('Synaplan URL') }}</label>
         <input id="synaplan-url" v-model="synaplanUrl" type="url" placeholder="https://synaplan.example.org" />
@@ -280,7 +280,7 @@ function formatConsentDate(iso: string | null | undefined): string {
     </fieldset>
 
     <fieldset>
-      <legend>{{ t('Local backend') }}</legend>
+      <legend>{{ t('Local (development)') }}</legend>
       <div class="synaplan-admin-field">
         <label for="synaplan-url-local">{{ t('Synaplan URL (local)') }}</label>
         <input

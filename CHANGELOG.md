@@ -21,10 +21,13 @@ All notable changes to this project are documented here. The format is based on
   account is used.
 - One sentence per failure, with a link to the page that fixes it.
 - The chat launcher on every page for signed-in people.
+- German (informal and formal), Spanish, French and Turkish, in the words
+  Synaplan itself uses.
 
 ### Changed
 
-- **Add to Knowledge** is now **Make searchable by AI**.
+- **Add to Knowledge** is now **Make searchable by AI**, and the chat picks a
+  knowledge folder.
 - Summarize, Translate and Make searchable by AI appear only on files Synaplan
   can read.
 - Keys are stored encrypted. A key 1.0.0 stored in plain text is encrypted on

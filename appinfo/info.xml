@@ -8,14 +8,14 @@
       xsi:noNamespaceSchemaLocation="https://apps.owncloud.com/schema/apps/info.xsd">
 	<id>oco_synaplan</id>
 	<name>Synaplan Integration</name>
-	<summary>AI-powered document summarization, translation, knowledge base, and chat</summary>
+	<summary>Summaries, translations, chat and AI search for your files, powered by Synaplan</summary>
 	<description>
 Bring Synaplan's AI capabilities directly into ownCloud.online:
 
 - Summarize documents with one click
 - Translate files to multiple languages
 - Make searchable by AI — let Synaplan answer from your files
-- Research Chat — AI assistant with knowledge group and model selection,
+- Research Chat — AI assistant with knowledge folder and model selection,
   optional personal memories, and live status (model, language, image/video)
 - Configurable answer language — set a default and optionally follow each
   user's interface language

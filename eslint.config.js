@@ -21,7 +21,7 @@ export default defineConfig(
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['build.mjs', '*.config.ts', 'tests/**'],
+    files: ['build.mjs', 'scripts/*.mjs', '*.config.ts', 'tests/**'],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
   {

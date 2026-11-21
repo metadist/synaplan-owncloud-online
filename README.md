@@ -1,7 +1,6 @@
 # Synaplan Integration for ownCloud.online
 
-AI-powered document summarization, translation, knowledge base, and research
-chat — directly in BW-Tech
+Summaries, translations, chat and AI search for your files — directly in BW-Tech
 [ownCloud.online](https://github.com/BWTECH-github/owncloud.online) 11.0.10. It
 talks to the **Synaplan backend API**.
 
@@ -84,8 +83,14 @@ make deps          # composer install + npm ci
 make build         # production frontend build (js/, not committed)
 make dev           # rebuild on change (watch)
 make format        # fix the PHP code style, format the frontend
+make l10n          # write l10n/<locale>.js after editing l10n/<locale>.json
 make ci-local      # every CI job except e2e — run before each commit
 ```
+
+The app ships English, German (`de` informal, `de_DE` formal), Spanish,
+French and Turkish. A string added to `t()` is translated in every
+`l10n/<locale>.json` in the same change; the locale test in Vitest fails
+otherwise.
 
 `make ci-local` runs php-cs-fixer, ESLint, Prettier, PHPStan, PHPUnit, the
 contract test, the contract-fixture check, vue-tsc, Vitest, the build, and

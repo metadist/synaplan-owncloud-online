@@ -1,4 +1,4 @@
-.PHONY: help deps build dev lint lint-php lint-js format check-types typecheck ocp stan test test-php test-unit-js \
+.PHONY: help deps build dev l10n lint lint-php lint-js format check-types typecheck ocp stan test test-php test-unit-js \
 	openapi test-contract contract-fixtures check-contract-fixtures ci-local clean package check-tarball \
 	link unlink dev-server dev-up dev-down dev-reset dev-occ dev-logs dev-shell e2e-up test-e2e e2e-down
 
@@ -34,6 +34,9 @@ build: ## Build the frontend IIFE bundles into js/
 
 dev: ## Rebuild the frontend on change (watch)
 	npm run dev
+
+l10n: ## Write l10n/<locale>.js from l10n/<locale>.json after editing translations
+	node scripts/l10n-js.mjs
 
 ## Quality
 
@@ -178,8 +181,7 @@ clean: ## Remove build artifacts
 package: build ## Create an installable app tarball
 	rm -rf $(build_dir)
 	mkdir -p $(build_dir)/$(app_name)
-	cp -r appinfo lib templates img js public $(build_dir)/$(app_name)/
-	test -d l10n && cp -r l10n $(build_dir)/$(app_name)/ || true
+	cp -r appinfo lib templates img js l10n public $(build_dir)/$(app_name)/
 	cp CHANGELOG.md LICENSE README.md $(build_dir)/$(app_name)/ 2>/dev/null || true
 	cd $(build_dir) && tar -czf ../../$(app_name).tar.gz $(app_name)
 	rm -rf $(build_dir)

@@ -261,8 +261,8 @@ function onKeydown(e: KeyboardEvent): void {
           <option value="">{{ t('Default model') }}</option>
           <option v-for="m in models" :key="m.id" :value="m.providerId || m.name">{{ m.name }}</option>
         </select>
-        <select v-if="groups.length" v-model="selectedGroup" :title="t('Knowledge base')">
-          <option value="">{{ t('No knowledge base') }}</option>
+        <select v-if="groups.length" v-model="selectedGroup" :title="t('Knowledge folder')">
+          <option value="">{{ t('No knowledge folder') }}</option>
           <option v-for="g in groups" :key="g.name" :value="g.name">{{ g.name }}</option>
         </select>
         <label v-if="memoryAvailable" class="synaplan-memtoggle">

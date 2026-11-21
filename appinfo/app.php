@@ -22,14 +22,17 @@ $app = new Application();
 $container = $app->getContainer();
 
 // The file actions belong to the Files app: its ViewController dispatches this
-// event when it renders.
+// event when it renders. Each script's translations are added before it,
+// because scripts run in the order they are added.
 $dispatcher = \OC::$server->getEventDispatcher();
 $dispatcher->addListener('OCA\Files::loadAdditionalScripts', function () {
+    Util::addTranslations(Application::APP_ID);
     Util::addScript(Application::APP_ID, 'files-init');
 });
 
 // The chat launcher is on every page a signed-in person opens.
 if (!\OC::$CLI && \OC::$server->getUserSession()->getUser() !== null) {
+    Util::addTranslations(Application::APP_ID);
     Util::addScript(Application::APP_ID, 'chat-launcher');
 }
 

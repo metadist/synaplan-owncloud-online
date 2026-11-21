@@ -27,6 +27,7 @@ class Personal implements ISettings
 {
     public function getPanel(): Template
     {
+        Util::addTranslations(Application::APP_ID);
         Util::addScript(Application::APP_ID, 'personal-settings');
 
         return new Template(Application::APP_ID, 'settings/personal');
