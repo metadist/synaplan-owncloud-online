@@ -56,10 +56,10 @@ class ChatController extends Controller
      * @param string      $message     User's question
      * @param int|null    $fileId      ownCloud.online file ID for document context
      * @param string|null $groupKey    RAG group key for knowledge base context
-     * @param int|null    $modelId     Specific model ID to use
+     * @param string|null $model       Provider model id/name (null = user default)
      * @param bool        $useMemories Whether to enrich the answer with the user's memories
      */
-    public function chat(string $message = '', ?int $fileId = null, ?string $groupKey = null, ?int $modelId = null, bool $useMemories = false): JSONResponse
+    public function chat(string $message = '', ?int $fileId = null, ?string $groupKey = null, ?string $model = null, bool $useMemories = false): JSONResponse
     {
         if ($message === '') {
             $body = file_get_contents('php://input');
@@ -69,7 +69,7 @@ class ChatController extends Controller
                     $message = trim((string) ($decoded['message'] ?? ''));
                     $fileId = isset($decoded['fileId']) ? (int) $decoded['fileId'] : $fileId;
                     $groupKey = isset($decoded['groupKey']) ? trim((string) $decoded['groupKey']) : $groupKey;
-                    $modelId = isset($decoded['modelId']) ? (int) $decoded['modelId'] : $modelId;
+                    $model = isset($decoded['model']) ? trim((string) $decoded['model']) : $model;
                     $useMemories = isset($decoded['useMemories']) ? (bool) $decoded['useMemories'] : $useMemories;
                 }
             }
@@ -80,26 +80,11 @@ class ChatController extends Controller
         }
 
         try {
-            $context = '';
-
-            if ($fileId !== null) {
-                $context = $this->getFileInfo($fileId)['content'];
-            }
-
-            if ($useMemories) {
-                $memoryContext = $this->synaplanClient->searchMemoryContext($message);
-                if ($memoryContext !== '') {
-                    $context = "What you remember about the user:\n" . $memoryContext
-                        . ($context !== '' ? "\n\n" . $context : '');
-                }
-            }
-
-            $language = $this->languageService->resolveLanguage();
-            $result = $this->synaplanClient->ask($message, $context, $language, $groupKey, $modelId);
+            $answer = $this->synaplanClient->chat($this->messages($message, $fileId, $groupKey, $useMemories), $model);
 
             return new JSONResponse([
                 'success' => true,
-                'response' => $result['summary'] ?? '',
+                'response' => $answer,
                 'deepLink' => $this->synaplanClient->getPublicBaseUrl(),
             ]);
         } catch (\Exception $e) {
@@ -143,36 +128,7 @@ class ChatController extends Controller
         }
 
         try {
-            $context = '';
-
-            if ($fileId !== null) {
-                $context = $this->getFileInfo($fileId)['content'];
-            }
-
-            if ($groupKey !== null && $groupKey !== '') {
-                $ragContext = $this->synaplanClient->searchRagContext($message, $groupKey);
-                if ($ragContext !== '') {
-                    $context = $ragContext . ($context !== '' ? "\n\n" . $context : '');
-                }
-            }
-
-            $memoryContext = '';
-            if ($useMemories) {
-                $memoryContext = $this->synaplanClient->searchMemoryContext($message);
-            }
-
-            $userContent = $context !== ''
-                ? "Based on the following context, answer the user's question.\n\n"
-                    . "--- CONTEXT ---\n" . $context . "\n--- END CONTEXT ---\n\n"
-                    . 'Question: ' . $message
-                : $message;
-
-            $messages = [
-                ['role' => 'system', 'content' => $this->buildSystemPrompt($memoryContext)],
-                ['role' => 'user', 'content' => $userContent],
-            ];
-
-            $payload = ['messages' => $messages, 'stream' => true];
+            $payload = ['messages' => $this->messages($message, $fileId, $groupKey, $useMemories), 'stream' => true];
             if ($model !== null && $model !== '') {
                 $payload['model'] = $model;
             }
@@ -187,6 +143,37 @@ class ChatController extends Controller
         } catch (\Exception $e) {
             return $this->failed($e, 'Chat stream failed');
         }
+    }
+
+    /**
+     * The system prompt and the question, with the file, the knowledge group
+     * and the person's memories as context.
+     *
+     * @return list<array{role: string, content: string}>
+     */
+    private function messages(string $message, ?int $fileId, ?string $groupKey, bool $useMemories): array
+    {
+        $context = $fileId !== null ? $this->getFileInfo($fileId)['content'] : '';
+
+        if ($groupKey !== null && $groupKey !== '') {
+            $ragContext = $this->synaplanClient->searchRagContext($message, $groupKey);
+            if ($ragContext !== '') {
+                $context = $ragContext . ($context !== '' ? "\n\n" . $context : '');
+            }
+        }
+
+        $memoryContext = $useMemories ? $this->synaplanClient->searchMemoryContext($message) : '';
+
+        $userContent = $context !== ''
+            ? "Based on the following context, answer the user's question.\n\n"
+                . "--- CONTEXT ---\n" . $context . "\n--- END CONTEXT ---\n\n"
+                . 'Question: ' . $message
+            : $message;
+
+        return [
+            ['role' => 'system', 'content' => $this->buildSystemPrompt($memoryContext)],
+            ['role' => 'user', 'content' => $userContent],
+        ];
     }
 
     /**

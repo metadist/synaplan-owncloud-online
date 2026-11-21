@@ -139,7 +139,7 @@ export const api = {
     message: string
     fileId?: number | null
     groupKey?: string | null
-    modelId?: number | null
+    model?: string | null
     useMemories?: boolean
   }) => apiFetch<{ success: boolean; response: string }>('/api/v1/chat', { method: 'POST', body: payload }),
 
