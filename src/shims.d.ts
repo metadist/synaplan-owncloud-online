@@ -19,8 +19,9 @@ interface OcFileAction {
   order?: number
   iconClass?: string
   icon?: string | (() => string)
-  // context shape varies across ownCloud.online point releases; kept loose on purpose.
-  actionHandler: (fileName: string, context: any) => void
+  // The context shape varies across ownCloud.online point releases; each
+  // handler narrows it (method syntax keeps that assignable).
+  actionHandler(fileName: string, context: unknown): void
 }
 
 interface OcGlobal {

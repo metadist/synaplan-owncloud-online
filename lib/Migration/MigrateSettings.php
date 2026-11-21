@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\Migration;
 
+use Doctrine\DBAL\Result;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
@@ -45,18 +46,20 @@ class MigrateSettings implements IRepairStep
         }
 
         $query = $this->db->getQueryBuilder();
-        $query->select('userid', 'configvalue')
+        $query->select(['userid', 'configvalue'])
             ->from('preferences')
             ->where($query->expr()->eq('appid', $query->createNamedParameter(Application::APP_ID)))
             ->andWhere($query->expr()->eq('configkey', $query->createNamedParameter(KeyStorage::USER_KEY)));
         $result = $query->execute();
         $uids = [];
-        while (($row = $result->fetchAssociative()) !== false) {
-            if (!str_starts_with((string) $row['configvalue'], KeyStorage::PREFIX)) {
-                $uids[] = (string) $row['userid'];
+        if ($result instanceof Result) {
+            while (($row = $result->fetchAssociative()) !== false) {
+                if (!str_starts_with((string) $row['configvalue'], KeyStorage::PREFIX)) {
+                    $uids[] = (string) $row['userid'];
+                }
             }
+            $result->free();
         }
-        $result->free();
 
         foreach ($uids as $uid) {
             $this->keys->getUserKey($uid);

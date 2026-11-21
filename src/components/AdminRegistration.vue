@@ -40,7 +40,10 @@ const statusLabel = computed(() => {
     <p class="oco-sub">
       {{
         mode === 'provision'
-          ? t('Register this {app} before creating accounts, so each person belongs to this server. You do this once.', { app: APP_NAME })
+          ? t(
+              'Register this {app} before creating accounts, so each person belongs to this server. You do this once.',
+              { app: APP_NAME },
+            )
           : t('Register this {app} so people can connect their Synaplan account. You do this once.', { app: APP_NAME })
       }}
     </p>

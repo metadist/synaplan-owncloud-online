@@ -2,10 +2,20 @@
 /node_modules/
 /vendor/
 
-# Build / release artifacts
+# Build / release artifacts: `make build` writes js/, `make package` ships it
+/js/
 *.tar.gz
 *.tar.gz.sig
 /release-work/build/
+
+# OCP of the ownCloud.online release (scripts/ocp.sh) and the pinned
+# Synaplan's OpenAPI dump (scripts/synaplan-openapi.sh)
+/.cache/
+/tests/Contract/.cache/
+
+# Playwright
+/playwright-report/
+/test-results/
 
 # Local dev stack (copy of docker-compose.dev.yml.example)
 /docker-compose.dev.yml

@@ -27,6 +27,9 @@ class Application extends App
 {
     public const APP_ID = 'oco_synaplan';
 
+    /**
+     * @param array<string, mixed> $urlParams
+     */
     public function __construct(array $urlParams = [])
     {
         parent::__construct(self::APP_ID, $urlParams);

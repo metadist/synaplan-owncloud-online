@@ -302,7 +302,7 @@ class PlatformLinkService
     {
         $info = $this->appManager->getAppInfo(Application::APP_ID);
 
-        return is_array($info) && is_string($info['version'] ?? null) ? $info['version'] : '';
+        return is_string($info['version'] ?? null) ? $info['version'] : '';
     }
 
     /**

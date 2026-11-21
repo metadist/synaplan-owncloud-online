@@ -1,6 +1,7 @@
 /**
- * Output languages offered in the UI. Mirrors LanguageService::SUPPORTED on the
- * PHP side (the backend still resolves/validates the effective language).
+ * Output languages offered in the UI, each one LanguageService::SUPPORTED
+ * accepts on the PHP side (the backend still resolves/validates the
+ * effective language).
  */
 export interface LanguageOption {
   code: string

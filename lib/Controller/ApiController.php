@@ -109,7 +109,7 @@ class ApiController extends Controller
 
         return new JSONResponse(array_merge([
             'success' => true,
-            'version' => is_array($info) ? ($info['version'] ?? '') : '',
+            'version' => is_string($info['version'] ?? null) ? $info['version'] : '',
             'language' => $language,
             'languageName' => $this->languageService->getLanguageName($language),
             'useInterfaceLanguage' => $this->languageService->useInterfaceLanguage(),

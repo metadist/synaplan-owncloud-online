@@ -1,4 +1,6 @@
-.PHONY: help build dev lint lint-php lint-js check-types deps clean package link unlink dev-server dev-up dev-down dev-reset dev-occ dev-logs dev-shell
+.PHONY: help deps build dev lint lint-php lint-js format check-types typecheck ocp stan test test-php test-unit-js \
+	openapi test-contract contract-fixtures check-contract-fixtures ci-local clean package check-tarball \
+	link unlink dev-server dev-up dev-down dev-reset dev-occ dev-logs dev-shell e2e-up test-e2e e2e-down
 
 app_name := oco_synaplan
 # The BW-Tech ownCloud.online checkout and its tag (README "Development").
@@ -9,15 +11,21 @@ OCO_REPO := https://github.com/BWTECH-github/owncloud.online.git
 OC_APPS ?= $(OCO_SERVER_PATH)/apps
 build_dir := release-work/build
 
+# The Synaplan the app is tested against: the image pinned in CI, and a
+# metadist/synaplan checkout for its test stack and the contract fixtures.
+SYNAPLAN_DIR ?= ../synaplan
+export APP_IMAGE ?= ghcr.io/metadist/synaplan@$(shell grep -oE 'SYNAPLAN_IMAGE_DIGEST:[[:space:]]+sha256:[a-f0-9]+' .github/workflows/ci.yml | awk '{print $$2}')
+export SYNAPLAN_DIR
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
 ## Dependencies
 
 deps: ## Install PHP + JS dependencies
 	composer install
-	npm install
+	npm ci
 
 ## Build
 
@@ -34,11 +42,44 @@ lint: lint-php lint-js ## Run all linters
 lint-php: ## PHP code style check (php-cs-fixer, PSR-12)
 	composer run lint
 
-lint-js: ## Frontend lint + type check
+lint-js: ## Frontend lint (ESLint) and format check (Prettier)
+	npm run lint
+	npm run format:check
+
+format: ## Fix the PHP code style and format the frontend
+	composer run lint:fix
+	npm run format
+
+check-types typecheck: ## Type-check the frontend and the tests (vue-tsc)
 	npm run check-types
 
-check-types: ## Type-check the frontend (vue-tsc)
-	npm run check-types
+ocp: ## Fetch the OCP interfaces of OCO_TAG for PHPUnit and PHPStan (.cache/ocp)
+	scripts/ocp.sh
+
+stan: ocp ## PHPStan (level in phpstan.neon, no baseline)
+	composer run stan
+
+test: test-php ## Run the PHPUnit unit tests
+
+test-php: ocp ## Run the PHPUnit unit tests
+	composer run test
+
+test-unit-js: ## Run the Vitest unit tests
+	npm run test:unit
+
+openapi: ## Dump the pinned Synaplan's OpenAPI spec and routes (SYNAPLAN_SRC_CONTAINER=synaplan-app-test: the running test stack)
+	scripts/synaplan-openapi.sh
+
+test-contract: ocp openapi ## Check every call the app makes against the pinned Synaplan
+	composer run test:contract
+
+contract-fixtures: ## Vendor the pinned Synaplan's contract fixtures from SYNAPLAN_DIR (never edit them by hand)
+	scripts/vendor-contract.sh
+
+check-contract-fixtures: ## Check the vendored contract fixtures are the pinned Synaplan's, byte for byte
+	scripts/vendor-contract.sh --check
+
+ci-local: lint stan test test-contract check-contract-fixtures typecheck test-unit-js package check-tarball ## Every CI job except e2e — run before each commit
 
 ## Dev install into ownCloud.online
 
@@ -55,7 +96,7 @@ unlink: ## Remove the symlink from the ownCloud.online apps dir
 
 COMPOSE_DEV := docker compose -f docker-compose.dev.yml
 OCO_EXEC := $(COMPOSE_DEV) exec -T -u www-data owncloud
-export OCO_SERVER_PATH OCO_TAG
+export OCO_SERVER_PATH OCO_TAG SYNAPLAN_URL_LOCAL
 
 # The gitignored copy follows the example: created when missing, and refreshed
 # when the example is newer, with the old copy kept as docker-compose.dev.yml.bak.
@@ -79,7 +120,7 @@ dev-up: docker-compose.dev.yml ## Start ownCloud.online on :8083 with MariaDB, c
 	@test -f $(OCO_SERVER_PATH)/version.php || { echo "No checkout at $(OCO_SERVER_PATH): run 'make dev-server'."; exit 1; }
 	@if [ ! -f js/files-init.js ]; then \
 		echo "Building the frontend (js/ is missing)…"; \
-		test -d node_modules || npm install; \
+		test -d node_modules || npm ci; \
 		$(MAKE) build; \
 	fi
 	$(COMPOSE_DEV) up -d --build --wait
@@ -105,6 +146,29 @@ dev-logs: docker-compose.dev.yml ## Follow the ownCloud.online container logs
 dev-shell: docker-compose.dev.yml ## Open a shell in the ownCloud.online container as www-data
 	$(COMPOSE_DEV) exec -u www-data owncloud bash
 
+## End-to-end journeys (Playwright)
+# The Synaplan test stack of SYNAPLAN_DIR runs the pinned image (APP_IMAGE)
+# on :8001; the journeys run on the dev stack, which reaches it on the
+# Docker host.
+
+COMPOSE_E2E_SYNAPLAN := docker compose -p synaplan-owncloud-e2e-synaplan \
+	-f $(SYNAPLAN_DIR)/docker-compose.test.yml \
+	-f $(SYNAPLAN_DIR)/docker-compose.test.ci.yml \
+	-f tests/e2e/synaplan-test-stack.yml
+
+e2e-up: build ## Start the Synaplan test stack on :8001 and ownCloud.online on :8083
+	@test -f $(SYNAPLAN_DIR)/docker-compose.test.yml || { echo "No Synaplan checkout at $(SYNAPLAN_DIR) (README, Development)."; exit 1; }
+	docker image inspect $(APP_IMAGE) >/dev/null 2>&1 || docker pull -q $(APP_IMAGE)
+	$(COMPOSE_E2E_SYNAPLAN) up -d --wait
+	$(MAKE) dev-up SYNAPLAN_URL_LOCAL=http://host.docker.internal:8001
+
+test-e2e: ## Run the e2e journeys against the stacks of e2e-up
+	npx playwright test
+
+e2e-down: ## Remove the Synaplan test stack and reset the dev stack — destroys both stacks' data
+	$(COMPOSE_E2E_SYNAPLAN) down -v
+	$(MAKE) dev-reset
+
 ## Release
 
 clean: ## Remove build artifacts
@@ -123,3 +187,6 @@ package: build ## Create an installable app tarball
 	@echo "Created: $(app_name).tar.gz"
 	@tar -tzf $(app_name).tar.gz | head -12
 	@echo "..."
+
+check-tarball: ## Check the tarball of make package holds the app and nothing from development
+	scripts/check-tarball.sh $(app_name).tar.gz

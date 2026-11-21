@@ -49,9 +49,7 @@ const initFailure = ref<Failure | null>(null)
 
 const scrollEl = ref<HTMLElement | null>(null)
 
-const memoryAvailable = computed(
-  () => !!config.value?.memory.allowed && !!config.value?.memory.available,
-)
+const memoryAvailable = computed(() => !!config.value?.memory.allowed && !!config.value?.memory.available)
 const languageName = computed(() => config.value?.languageName ?? '')
 
 onMounted(async () => {
@@ -170,7 +168,7 @@ async function generateMedia(type: 'image' | 'video', prompt: string): Promise<v
       assistant.failure = describeFailure('synaplan_error')
       return
     }
-    const filename = prompt.slice(0, 40).replace(/[^\w\-]+/g, '_') + (type === 'image' ? '.png' : '.mp4')
+    const filename = prompt.slice(0, 40).replace(/[^\w-]+/g, '_') + (type === 'image' ? '.png' : '.mp4')
     assistant.text = ''
     assistant.html = ''
     assistant.media = {
@@ -242,7 +240,12 @@ function onKeydown(e: KeyboardEvent): void {
         >
           <FailureNote v-if="m.failure" :failure="m.failure" />
           <template v-else-if="m.media">
-            <img v-if="m.media.type === 'image'" :src="m.media.proxyUrl" class="synaplan-media" :alt="t('Generated image')" />
+            <img
+              v-if="m.media.type === 'image'"
+              :src="m.media.proxyUrl"
+              class="synaplan-media"
+              :alt="t('Generated image')"
+            />
             <video v-else :src="m.media.proxyUrl" class="synaplan-media" controls />
             <div>
               <button class="oco-btn" @click="saveMedia(m.media)">{{ t('Save to Files') }}</button>
@@ -268,12 +271,7 @@ function onKeydown(e: KeyboardEvent): void {
       </div>
 
       <div class="synaplan-chat-input">
-        <textarea
-          v-model="input"
-          rows="1"
-          :placeholder="t('Message Synaplan…')"
-          @keydown="onKeydown"
-        />
+        <textarea v-model="input" rows="1" :placeholder="t('Message Synaplan…')" @keydown="onKeydown" />
         <button class="oco-btn primary" :disabled="sending || !input.trim()" @click="send">
           {{ sending ? t('…') : t('Send') }}
         </button>
@@ -356,8 +354,12 @@ function onKeydown(e: KeyboardEvent): void {
   background: none;
   padding: 0;
 }
-.synaplan-msg-content :first-child { margin-top: 0; }
-.synaplan-msg-content :last-child { margin-bottom: 0; }
+.synaplan-msg-content :first-child {
+  margin-top: 0;
+}
+.synaplan-msg-content :last-child {
+  margin-bottom: 0;
+}
 .synaplan-msg-content pre {
   overflow-x: auto;
   background: rgba(0, 0, 0, 0.06);

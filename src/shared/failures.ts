@@ -72,7 +72,10 @@ export function describeFailure(code?: string, message?: string): Failure {
       }
     case 'synaplan_error':
       return {
-        text: explained(t('Synaplan could not finish this. Try again in a minute, or ask your administrator.'), message),
+        text: explained(
+          t('Synaplan could not finish this. Try again in a minute, or ask your administrator.'),
+          message,
+        ),
       }
     case 'synaplan_key_rejected':
       return {

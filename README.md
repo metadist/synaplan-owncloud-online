@@ -43,7 +43,7 @@ talks to the **Synaplan backend API**.
 git clone https://github.com/metadist/synaplan-owncloud-online.git
 cd synaplan-owncloud-online
 
-make deps          # composer install + npm install
+make deps          # composer install + npm ci
 make build         # build the frontend bundles into js/
 
 # Symlink into your ownCloud.online apps dir and enable it
@@ -77,12 +77,50 @@ Synaplan**.
 
 ## Development
 
+PHP 8.4 with Composer, and Node 26 with npm 11, on the host.
+
 ```bash
-make build         # production frontend build (js/)
+make deps          # composer install + npm ci
+make build         # production frontend build (js/, not committed)
 make dev           # rebuild on change (watch)
-make check-types   # vue-tsc type check
-make lint          # php-cs-fixer + vue-tsc
+make format        # fix the PHP code style, format the frontend
+make ci-local      # every CI job except e2e — run before each commit
 ```
+
+`make ci-local` runs php-cs-fixer, ESLint, Prettier, PHPStan, PHPUnit, the
+contract test, the contract-fixture check, vue-tsc, Vitest, the build, and
+the package with its tarball check. **All Checks Passed** in
+`.github/workflows/ci.yml` is the merge gate; CI runs the PHP checks and the
+e2e journeys on `v11.0.10` and `v11.0.29`.
+
+### Tests
+
+| Target | Runs |
+| --- | --- |
+| `make test` | PHPUnit (`tests/Unit`) against the OCP of `OCO_TAG`, which `scripts/ocp.sh` fetches into `.cache/` |
+| `make stan` | PHPStan at the level in `phpstan.neon`, no baseline |
+| `make test-unit-js` | Vitest (`tests/unit`) |
+| `make test-contract` | every call the app makes, checked against the OpenAPI spec and routes of the Synaplan image pinned in `ci.yml` (`SYNAPLAN_IMAGE_DIGEST`) and against the cloud-apps contract in `tests/fixtures/synaplan-contract/` |
+| `make check-contract-fixtures` | the vendored contract fixtures are, byte for byte, the pinned Synaplan's |
+| `make e2e-up test-e2e e2e-down` | the Playwright journeys (`tests/e2e`) |
+
+The contract fixtures come from the commit the pinned image was built from
+(`make contract-fixtures SYNAPLAN_DIR=/path/to/synaplan`) and are never
+edited by hand. A call the pinned Synaplan does not describe is a gap to
+raise with Synaplan, not a hand-written exception.
+
+The journeys need the BW-Tech checkout of `make dev-server` and a
+[metadist/synaplan](https://github.com/metadist/synaplan) checkout in
+`SYNAPLAN_DIR` (default `../synaplan`) for its test stack, at the commit of
+the pinned image (its `org.opencontainers.image.revision` label).
+`make e2e-up` starts that stack with the pinned image on `:8001` and the dev
+stack on `:8083`. The global setup gives the app an admin API key, the mode
+*Connect your Synaplan account* and a registration of this server; the
+journeys then sign in as Ada, Carol and the admin. `npx playwright install
+chromium` once fetches the browser. `make e2e-down` deletes both stacks'
+data. `OCO_URL` and `E2E_SYNAPLAN_URL` move the journeys to other ports;
+point `E2E_SYNAPLAN_URL` only at a Synaplan test stack, since the journeys
+create keys and register this server there.
 
 ### Local ownCloud.online stack
 

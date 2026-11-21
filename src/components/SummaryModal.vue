@@ -67,9 +67,7 @@ async function run(): Promise<void> {
       </div>
     </template>
 
-    <div v-if="loading" class="oco-loading">
-      <span class="oco-spinner" /> {{ t('Generating summary…') }}
-    </div>
+    <div v-if="loading" class="oco-loading"><span class="oco-spinner" /> {{ t('Generating summary…') }}</div>
 
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div v-if="resultHtml" class="oco-result" v-html="resultHtml" />

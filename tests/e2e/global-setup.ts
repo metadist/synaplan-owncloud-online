@@ -1,0 +1,113 @@
+import { expect, request } from '@playwright/test'
+import {
+  APP,
+  davAs,
+  FILE,
+  OCO_URL,
+  ownCloudAs,
+  resetPerson,
+  saveSettings,
+  SYNAPLAN_ADMIN,
+  SYNAPLAN_URL,
+  synaplanAs,
+} from './support'
+
+const READY_TIMEOUT_MS = 180_000
+
+/** The test people the journeys sign in as. */
+const PEOPLE = ['ada', 'carol']
+
+const REVIEW_TEXT = `Vendor review: Northwind Office Supplies
+
+Northwind delivered 96 of 100 orders on time this quarter. Two deliveries
+arrived damaged and were replaced within a week. Prices rose by 4 percent in
+March. The account manager answers within one working day.
+
+Recommendation: keep Northwind for another year and ask for a fixed price
+until December.
+`
+
+/** The initial access token the Synaplan test stack accepts (synaplan-test-stack.yml). */
+const REGISTRATION_TOKEN = 'owncloud-e2e-initial-access-token-0001'
+
+async function waitUntilReady(url: string): Promise<void> {
+  const context = await request.newContext()
+  await expect
+    .poll(
+      async () => {
+        try {
+          return (await context.get(url)).status()
+        } catch {
+          return 0
+        }
+      },
+      { timeout: READY_TIMEOUT_MS, intervals: [2_000] },
+    )
+    .toBe(200)
+  await context.dispose()
+}
+
+async function registrationStatus(): Promise<string> {
+  const admin = await ownCloudAs('admin')
+  const response = await admin.get(`${APP}/api/v1/settings/instance-status`)
+  const { instance } = (await response.json()) as { instance: { status?: string } | null }
+  await admin.dispose()
+  return instance?.status ?? ''
+}
+
+/**
+ * Connects the app to the Synaplan test stack the way an administrator
+ * does: a Synaplan API key in the admin settings, "Connect your Synaplan
+ * account" as the mode, this ownCloud.online registered. Each test person
+ * starts without AI access and gets the file the journeys work on, so the
+ * suite also runs again on the same stacks.
+ */
+export default async function globalSetup(): Promise<void> {
+  await waitUntilReady(`${SYNAPLAN_URL}/api/health`)
+  await waitUntilReady(`${OCO_URL}/status.php`)
+
+  const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
+  const created = await synaplan.post('/api/v1/apikeys', {
+    data: { name: `ownCloud.online e2e ${new Date().toISOString()}` },
+  })
+  expect(created.ok(), 'creating the Synaplan API key').toBe(true)
+  const { api_key: apiKey } = (await created.json()) as { api_key: { key: string } }
+  await synaplan.dispose()
+
+  // Synaplan's container reaches this ownCloud.online on the Docker host,
+  // and so does ownCloud.online's container reach Synaplan.
+  const internal = new URL(SYNAPLAN_URL)
+  internal.hostname = 'host.docker.internal'
+  await saveSettings({
+    active_env: 'local',
+    synaplan_url_local: internal.origin,
+    synaplan_public_url_local: new URL(SYNAPLAN_URL).origin,
+    api_key_local: apiKey.key,
+    mode: 'link',
+    per_user_accounts: true,
+    link_auto_provision: false,
+  })
+
+  if ((await registrationStatus()) !== 'active') {
+    const admin = await ownCloudAs('admin')
+    await admin.post(`${APP}/api/v1/settings/forget-instance`)
+    const registered = await admin.post(`${APP}/api/v1/settings/register-instance`, {
+      data: { registration_token: REGISTRATION_TOKEN },
+    })
+    const registration = (await registered.json()) as { error?: string }
+    expect(registration.error ?? '', 'registering ownCloud.online').toBe('')
+    await admin.dispose()
+  }
+  expect(await registrationStatus(), 'the instance is active').toBe('active')
+
+  for (const uid of PEOPLE) {
+    await resetPerson(uid)
+    const dav = await davAs(uid)
+    const uploaded = await dav.put(`/remote.php/dav/files/${uid}/${FILE}`, {
+      data: REVIEW_TEXT,
+      headers: { 'Content-Type': 'text/plain' },
+    })
+    expect(uploaded.ok(), `uploading ${FILE} for ${uid}`).toBe(true)
+    await dav.dispose()
+  }
+}

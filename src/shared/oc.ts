@@ -25,9 +25,7 @@ export function translate(text: string, vars?: Record<string, unknown>): string 
   if (typeof window.t === 'function') {
     return window.t(APP_ID, text, vars)
   }
-  return text.replace(/\{(\w+)\}/g, (match, key: string) =>
-    vars && key in vars ? String(vars[key]) : match,
-  )
+  return text.replace(/\{(\w+)\}/g, (match, key: string) => (vars && key in vars ? String(vars[key]) : match))
 }
 
 /** Show a transient toast. */
@@ -87,7 +85,7 @@ export async function apiFetch<T = unknown>(path: string, options: RequestOption
 
   const response = await fetch(url(path), init)
   const text = await response.text()
-  let data: unknown = null
+  let data: unknown
   try {
     data = text ? JSON.parse(text) : null
   } catch {

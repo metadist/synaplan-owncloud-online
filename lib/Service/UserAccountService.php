@@ -261,7 +261,7 @@ class UserAccountService
             $since = $this->config->getUserValue($uid, Application::APP_ID, self::CONSENT_AT_PREF, '');
         }
         $linked = null;
-        if ($kind === self::KIND_LINKED && $user instanceof IUser) {
+        if ($kind === self::KIND_LINKED) {
             $linked = [
                 'email' => $email !== '' ? $email : (string) $user->getEMailAddress(),
                 'since' => $since,

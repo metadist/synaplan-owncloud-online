@@ -14,9 +14,7 @@ const banner = ref('')
 const bannerType = ref<BannerType>('success')
 
 const isLinked = computed(() => status.value?.kind === 'linked')
-const canConnect = computed(
-  () => status.value?.mode === 'link' && !isLinked.value && !!status.value?.link_available,
-)
+const canConnect = computed(() => status.value?.mode === 'link' && !isLinked.value && !!status.value?.link_available)
 
 const modeHint = computed(() => {
   if (!status.value || isLinked.value) {
@@ -78,7 +76,10 @@ function applyQueryBanner(): void {
       show(t('This {app} is waiting for approval by the Synaplan administrator.', { app: APP_NAME }), 'warning')
       break
     case 'client_refused':
-      show(t('Synaplan no longer accepts this {app}. Ask your administrator to register it again.', { app: APP_NAME }), 'error')
+      show(
+        t('Synaplan no longer accepts this {app}. Ask your administrator to register it again.', { app: APP_NAME }),
+        'error',
+      )
       break
     case 'not_registered':
       show(t('Your administrator still needs to register this {app} with Synaplan.', { app: APP_NAME }), 'warning')

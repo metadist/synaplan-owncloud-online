@@ -189,7 +189,8 @@ export const api = {
 
   // Admin AI users control panel
   listAiUsers: () => apiFetch<{ success: boolean; users: AiUser[] }>('/api/v1/admin/ai-users'),
-  aiUserUsage: (uid: string) => apiFetch<Record<string, unknown>>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/usage'),
+  aiUserUsage: (uid: string) =>
+    apiFetch<Record<string, unknown>>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/usage'),
   deactivateAiUser: (uid: string) =>
     apiFetch<{ success: boolean }>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/deactivate', {
       method: 'POST',
@@ -237,7 +238,7 @@ export async function chatStream(
   })
 
   if (!response.ok || !response.body) {
-    let data: unknown = null
+    let data: unknown
     try {
       data = JSON.parse(await response.text())
     } catch {

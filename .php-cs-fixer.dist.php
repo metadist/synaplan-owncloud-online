@@ -2,7 +2,9 @@
 
 $finder = PhpCsFixer\Finder::create()
     ->in(__DIR__ . '/lib')
-    ->in(__DIR__ . '/appinfo');
+    ->in(__DIR__ . '/appinfo')
+    ->in(__DIR__ . '/tests')
+    ->notPath('Contract/.cache');
 
 return (new PhpCsFixer\Config())
     ->setRiskyAllowed(false)

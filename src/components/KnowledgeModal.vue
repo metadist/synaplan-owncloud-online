@@ -44,9 +44,14 @@ async function makeSearchable(): Promise<void> {
   try {
     const res = await api.uploadToKnowledge(props.fileId, folderName.value)
     if (!res.success || res.chunksCreated === 0) {
-      failure.value = res.chunksCreated === 0 && res.success
-        ? { text: t('Synaplan found no text it could make searchable. The file may be empty or a scan. Check the file and try again.') }
-        : describeFailure('synaplan_error', res.error ?? undefined)
+      failure.value =
+        res.chunksCreated === 0 && res.success
+          ? {
+              text: t(
+                'Synaplan found no text it could make searchable. The file may be empty or a scan. Check the file and try again.',
+              ),
+            }
+          : describeFailure('synaplan_error', res.error ?? undefined)
       return
     }
     done.value = { passages: res.chunksCreated, updated: res.overwritten, folder: res.groupKey || folderName.value }
@@ -88,7 +93,9 @@ async function remove(): Promise<void> {
     <template v-else-if="done">
       <div class="oco-result">
         <p>
-          <strong>{{ done.updated ? t('Updated: the AI now uses the latest version') : t('This file is now searchable by AI') }}</strong>
+          <strong>{{
+            done.updated ? t('Updated: the AI now uses the latest version') : t('This file is now searchable by AI')
+          }}</strong>
         </p>
         <p>{{ t('Knowledge folder') }}: {{ done.folder }}</p>
         <p>{{ t('Searchable passages') }}: {{ done.passages }}</p>
@@ -100,7 +107,9 @@ async function remove(): Promise<void> {
 
     <template v-else-if="removed">
       <div class="oco-result">
-        <p><strong>{{ t('This file is no longer searchable by AI') }}</strong></p>
+        <p>
+          <strong>{{ t('This file is no longer searchable by AI') }}</strong>
+        </p>
       </div>
       <div class="oco-actions">
         <button class="oco-btn primary" @click="emit('close')">{{ t('Done') }}</button>
@@ -109,7 +118,11 @@ async function remove(): Promise<void> {
 
     <template v-else>
       <p v-if="stale">
-        {{ t('This file changed in {app} after it was made searchable. Update it so the AI uses the latest version.', { app: APP_NAME }) }}
+        {{
+          t('This file changed in {app} after it was made searchable. Update it so the AI uses the latest version.', {
+            app: APP_NAME,
+          })
+        }}
       </p>
       <p v-else-if="searchable">
         {{ t('This file is already searchable by AI. Updating it makes the AI use the latest version.') }}
@@ -136,7 +149,9 @@ async function remove(): Promise<void> {
       <FailureNote :failure="failure" />
 
       <div class="oco-actions">
-        <button v-if="searchable" class="oco-btn" :disabled="busy" @click="remove">{{ t('Remove from AI search') }}</button>
+        <button v-if="searchable" class="oco-btn" :disabled="busy" @click="remove">
+          {{ t('Remove from AI search') }}
+        </button>
         <button class="oco-btn" @click="emit('close')">{{ t('Cancel') }}</button>
         <button class="oco-btn primary" :disabled="busy" @click="makeSearchable">
           {{ searchable ? t('Update') : t('Make searchable') }}

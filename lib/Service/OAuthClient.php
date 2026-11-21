@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\Service;
 
+use Doctrine\DBAL\Result;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\PlatformLinkException;
 use OCP\Http\Client\IClientService;
@@ -206,6 +207,9 @@ class OAuthClient
         ]));
     }
 
+    /**
+     * @phpstan-impure accessToken() forgets a grant Synaplan ended
+     */
     public function isConnected(string $uid): bool
     {
         return $this->secret($uid, self::REFRESH) !== '';
@@ -372,6 +376,8 @@ class OAuthClient
      *
      * @param bool $fresh read past this request's settings cache: another
      *                    request may have rotated the grant meanwhile
+     *
+     * @phpstan-impure another request may have rotated the grant meanwhile
      */
     private function secret(string $uid, string $key, bool $fresh = false): string
     {
@@ -398,6 +404,9 @@ class OAuthClient
             ->andWhere($query->expr()->eq('appid', $query->createNamedParameter(Application::APP_ID)))
             ->andWhere($query->expr()->eq('configkey', $query->createNamedParameter($key)));
         $result = $query->execute();
+        if (!$result instanceof Result) {
+            return '';
+        }
         $value = $result->fetchOne();
         $result->free();
 

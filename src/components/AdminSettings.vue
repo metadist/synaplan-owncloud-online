@@ -57,7 +57,8 @@ const modes = computed(() => [
   {
     value: 'shared' as const,
     label: t('One shared account'),
-    hint: t('Everyone acts as one Synaplan account and sees its files.') + ' ' + t('Not for teams with private documents.'),
+    hint:
+      t('Everyone acts as one Synaplan account and sees its files.') + ' ' + t('Not for teams with private documents.'),
   },
 ])
 
@@ -259,7 +260,12 @@ function formatConsentDate(iso: string | null | undefined): string {
       </div>
       <div class="synaplan-admin-field">
         <label for="synaplan-public-url">{{ t('Address people open in the browser') }}</label>
-        <input id="synaplan-public-url" v-model="synaplanPublicUrl" type="url" placeholder="https://synaplan.example.org" />
+        <input
+          id="synaplan-public-url"
+          v-model="synaplanPublicUrl"
+          type="url"
+          placeholder="https://synaplan.example.org"
+        />
       </div>
       <div class="synaplan-admin-field">
         <label for="synaplan-api-key">{{ t('API key') }}</label>
@@ -277,7 +283,12 @@ function formatConsentDate(iso: string | null | undefined): string {
       <legend>{{ t('Local backend') }}</legend>
       <div class="synaplan-admin-field">
         <label for="synaplan-url-local">{{ t('Synaplan URL (local)') }}</label>
-        <input id="synaplan-url-local" v-model="synaplanUrlLocal" type="url" placeholder="http://host.docker.internal:8000" />
+        <input
+          id="synaplan-url-local"
+          v-model="synaplanUrlLocal"
+          type="url"
+          placeholder="http://host.docker.internal:8000"
+        />
       </div>
       <div class="synaplan-admin-field">
         <label for="synaplan-public-url-local">{{ t('Address people open in the browser') }}</label>
@@ -343,7 +354,9 @@ function formatConsentDate(iso: string | null | undefined): string {
           <input v-model="linkAutoProvision" type="checkbox" :disabled="saving || !hasAdminKey" />
           <span>
             {{ t('Offer to create an account for users who have none') }}
-            <span class="oco-sub">{{ t('Needs the admin API key. Users who already have a Synaplan account still connect it.') }}</span>
+            <span class="oco-sub">{{
+              t('Needs the admin API key. Users who already have a Synaplan account still connect it.')
+            }}</span>
           </span>
         </label>
       </template>
@@ -370,7 +383,11 @@ function formatConsentDate(iso: string | null | undefined): string {
     <template v-if="mode !== 'shared'">
       <h3>{{ t('AI Users') }}</h3>
       <p class="oco-sub">
-        {{ t('{app} users who have activated AI. Each has their own Synaplan account, files and usage.', { app: APP_NAME }) }}
+        {{
+          t('{app} users who have activated AI. Each has their own Synaplan account, files and usage.', {
+            app: APP_NAME,
+          })
+        }}
       </p>
       <div v-if="aiUsersLoading" class="oco-loading"><span class="oco-spinner" /></div>
       <table v-else class="synaplan-admin-users">
@@ -386,12 +403,16 @@ function formatConsentDate(iso: string | null | undefined): string {
         </thead>
         <tbody>
           <tr v-for="u in aiUsers" :key="u.uid">
-            <td>{{ u.displayName }} <span class="oco-sub">({{ u.uid }})</span></td>
+            <td>
+              {{ u.displayName }} <span class="oco-sub">({{ u.uid }})</span>
+            </td>
             <td>{{ u.email || '—' }}</td>
             <td>{{ kindLabel(u) }}</td>
             <td>{{ u.synaplanUserId ?? '—' }}</td>
             <td>{{ formatConsentDate(u.consentAt) }}</td>
-            <td><button class="oco-btn" @click="deactivate(u)">{{ t('Deactivate') }}</button></td>
+            <td>
+              <button class="oco-btn" @click="deactivate(u)">{{ t('Deactivate') }}</button>
+            </td>
           </tr>
           <tr v-if="aiUsers.length === 0">
             <td colspan="6" class="oco-sub">{{ t('No users have activated AI yet.') }}</td>
@@ -403,23 +424,35 @@ function formatConsentDate(iso: string | null | undefined): string {
 </template>
 
 <style>
-.synaplan-admin { max-width: 680px; }
-.synaplan-admin h2 { margin-bottom: 12px; }
-.synaplan-admin h3 { margin: 24px 0 8px; font-weight: 600; }
+.synaplan-admin {
+  max-width: 680px;
+}
+.synaplan-admin h2 {
+  margin-bottom: 12px;
+}
+.synaplan-admin h3 {
+  margin: 24px 0 8px;
+  font-weight: 600;
+}
 .synaplan-admin fieldset {
   border: 1px solid var(--color-border, #ddd);
   border-radius: var(--border-radius, 3px);
   padding: 10px 14px;
   margin: 12px 0;
 }
-.synaplan-admin legend { padding: 0 4px; font-weight: 600; }
+.synaplan-admin legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
 .synaplan-admin-field {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: 10px 0;
 }
-.synaplan-admin-field label { flex: 0 0 220px; }
+.synaplan-admin-field label {
+  flex: 0 0 220px;
+}
 .synaplan-admin-field input,
 .synaplan-admin-field select {
   flex: 1;
@@ -450,17 +483,26 @@ function formatConsentDate(iso: string | null | undefined): string {
   flex-direction: column;
   gap: 2px;
 }
-.synaplan-admin-mode.disabled { cursor: default; opacity: 0.7; }
+.synaplan-admin-mode.disabled {
+  cursor: default;
+  opacity: 0.7;
+}
 .synaplan-admin-mode input,
-.synaplan-admin-check input { margin-top: 3px; }
-.synaplan-admin-sub { margin-left: 24px; }
+.synaplan-admin-check input {
+  margin-top: 3px;
+}
+.synaplan-admin-sub {
+  margin-left: 24px;
+}
 .synaplan-admin-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: 16px 0;
 }
-.synaplan-ok { color: var(--color-success, #2d7d46); }
+.synaplan-ok {
+  color: var(--color-success, #2d7d46);
+}
 .synaplan-admin-users {
   width: 100%;
   border-collapse: collapse;
