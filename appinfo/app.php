@@ -13,6 +13,7 @@ declare(strict_types=1);
  */
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
 use OCP\Util;
@@ -20,26 +21,37 @@ use OCP\Util;
 $app = new Application();
 $container = $app->getContainer();
 
-// Inject the file-action + floating chat-launcher scripts into the Files app.
-// ownCloud.online's Files ViewController dispatches this event when it renders,
-// which scopes our scripts to the Files UI instead of loading them on every page.
+// The file actions belong to the Files app: its ViewController dispatches this
+// event when it renders.
 $dispatcher = \OC::$server->getEventDispatcher();
 $dispatcher->addListener('OCA\Files::loadAdditionalScripts', function () {
     Util::addScript(Application::APP_ID, 'files-init');
-    Util::addScript(Application::APP_ID, 'chat-launcher');
 });
 
-// Per-user mode: when a user is removed, delete their provisioned Synaplan
-// account too so no orphaned external data lingers. Best-effort — the service
-// never throws, so it cannot block ownCloud.online's own user deletion. Uses
-// preDelete so the uid -> Synaplan-account mapping is still readable.
+// The chat launcher is on every page a signed-in person opens.
+if (!\OC::$CLI && \OC::$server->getUserSession()->getUser() !== null) {
+    Util::addScript(Application::APP_ID, 'chat-launcher');
+}
+
+// A removed person takes their Synaplan connection with them. An account they
+// connected is theirs: only this server's grant or key ends. An account this
+// server created for them is deleted. Best-effort — neither call throws, so
+// neither can block ownCloud.online's own user deletion. preDelete keeps the
+// person's settings readable.
 \OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function ($user) use ($container) {
-    /** @var SynaplanConfig $config */
-    $config = $container->query(SynaplanConfig::class);
-    if (!$config->isPerUserAccountsEnabled()) {
-        return;
-    }
+    $uid = $user->getUID();
     /** @var UserAccountService $accounts */
     $accounts = $container->query(UserAccountService::class);
-    $accounts->deleteRemoteAccount($user->getUID());
+    if ($accounts->wasLinked($uid) || $accounts->getLinkKind($uid) === UserAccountService::KIND_LINKED) {
+        /** @var PlatformLinkService $platformLinks */
+        $platformLinks = $container->query(PlatformLinkService::class);
+        $platformLinks->disconnectUid($uid);
+
+        return;
+    }
+    /** @var SynaplanConfig $config */
+    $config = $container->query(SynaplanConfig::class);
+    if ($config->isPerUserAccountsEnabled()) {
+        $accounts->deleteRemoteAccount($uid);
+    }
 });

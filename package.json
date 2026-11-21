@@ -1,6 +1,6 @@
 {
   "name": "synaplan-owncloud-online",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Synaplan AI Integration for owncloud.online — frontend",
   "private": true,
   "type": "module",

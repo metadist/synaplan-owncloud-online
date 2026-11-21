@@ -7,9 +7,17 @@
 
 export const APP_ID = 'oco_synaplan'
 
+/** The product name people see; the app id and the source stay `owncloud`. */
+export const APP_NAME = 'ownCloud.online'
+
 /** Build an app-relative API URL, e.g. url('/api/v1/settings'). */
 export function url(path: string): string {
   return OC.generateUrl('/apps/' + APP_ID + path)
+}
+
+/** The person's Synaplan section in their personal settings. */
+export function personalSettingsUrl(): string {
+  return OC.generateUrl('/settings/personal') + '?sectionid=' + APP_ID
 }
 
 /** Translate a string (falls back to identity when OC.t is unavailable). */
@@ -17,7 +25,9 @@ export function translate(text: string, vars?: Record<string, unknown>): string 
   if (typeof window.t === 'function') {
     return window.t(APP_ID, text, vars)
   }
-  return text
+  return text.replace(/\{(\w+)\}/g, (match, key: string) =>
+    vars && key in vars ? String(vars[key]) : match,
+  )
 }
 
 /** Show a transient toast. */
@@ -29,6 +39,29 @@ export function notify(text: string): void {
   }
 }
 
+/**
+ * A rejected request to the app. `code` is the failure code from
+ * lib/Http/Failure.php, `detail` Synaplan's own sentence when it sent one.
+ */
+export class ApiError extends Error {
+  readonly status: number
+  readonly code: string
+  readonly detail: string
+  readonly data: unknown
+
+  constructor(status: number, data: unknown) {
+    const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+    const code = typeof body.error === 'string' ? body.error : ''
+    const detail = typeof body.message === 'string' ? body.message : ''
+    super(detail || code || 'Request failed (' + status + ')')
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.detail = detail
+    this.data = data
+  }
+}
+
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   body?: unknown
@@ -37,7 +70,7 @@ export interface RequestOptions {
 
 /**
  * Fetch JSON from an app endpoint with ownCloud.online's CSRF token attached.
- * Throws on a non-2xx response, surfacing the server's error message.
+ * Throws an ApiError on a non-2xx response.
  */
 export async function apiFetch<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? 'GET'
@@ -62,11 +95,7 @@ export async function apiFetch<T = unknown>(path: string, options: RequestOption
   }
 
   if (!response.ok) {
-    let message = 'Request failed (' + response.status + ')'
-    if (data && typeof data === 'object' && 'error' in data) {
-      message = String((data as { error: unknown }).error)
-    }
-    throw new Error(message)
+    throw new ApiError(response.status, data)
   }
 
   return data as T

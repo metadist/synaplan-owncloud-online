@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Http\SseProxyResponse;
 use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\SynaplanClient;
@@ -31,6 +32,8 @@ use OCP\IUserSession;
  */
 class ChatController extends Controller
 {
+    use RespondsToFailures;
+
     /** Max text to include as context (50 KB). */
     private const MAX_CONTEXT_SIZE = 50 * 1024;
 
@@ -97,20 +100,10 @@ class ChatController extends Controller
             return new JSONResponse([
                 'success' => true,
                 'response' => $result['summary'] ?? '',
-                'deepLink' => $this->synaplanClient->getBaseUrl(),
+                'deepLink' => $this->synaplanClient->getPublicBaseUrl(),
             ]);
-        } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
         } catch (\Exception $e) {
-            $this->logger->error('Chat failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Chat failed');
         }
     }
 
@@ -186,22 +179,13 @@ class ChatController extends Controller
 
             return new SseProxyResponse(
                 $this->synaplanClient->getBaseUrl() . '/v1/chat/completions',
-                $this->synaplanClient->getApiKey(),
+                $this->synaplanClient->requireApiKey(),
                 (string) json_encode($payload),
                 $this->logger,
+                fn () => $this->synaplanClient->keyRefused(),
             );
-        } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
         } catch (\Exception $e) {
-            $this->logger->error('Chat stream failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Chat stream failed');
         }
     }
 

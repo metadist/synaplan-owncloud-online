@@ -12,29 +12,44 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Service;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Http\Failure;
+use OCP\AppFramework\Http;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
+use OCP\Http\Client\IResponse;
+use OCP\ICacheFactory;
 use OCP\ILogger;
 
 /**
  * HTTP client for the Synaplan API.
  *
- * Uses X-API-Key authentication for all requests.
+ * Sends the person's or the install's credential with every request: an API
+ * key in X-API-Key, a connected person's access token as a bearer.
  * No ownCloud.online-specific business logic — only HTTP transport.
  */
 class SynaplanClient
 {
     private const TIMEOUT = 120;
     private const MEDIA_TIMEOUT = 180;
+    private const CAPABILITIES_TIMEOUT = 10;
+    /** Every Files page asks; Synaplan is asked again after this many seconds. */
+    private const CAPABILITIES_TTL = 600;
+    /** An unreadable answer is asked again sooner. */
+    private const CAPABILITIES_RETRY_TTL = 60;
 
     /** Provenance label sent to Synaplan so uploads are grouped by source. */
-    public const SOURCE = 'owncloud';
+    public const SOURCE = UserAccountService::SOURCE;
+
+    /** @var array<string, mixed>|null */
+    private ?array $capabilities = null;
 
     public function __construct(
         private IClientService $clientService,
         private ILogger $logger,
         private SynaplanConfig $synaplanConfig,
         private UserAccountService $userAccounts,
+        private ICacheFactory $cacheFactory,
     ) {
     }
 
@@ -46,7 +61,7 @@ class SynaplanClient
      */
     public function healthCheck(): array
     {
-        return $this->request('GET', '/api/health');
+        return $this->request('GET', '/api/health', null, false);
     }
 
     /**
@@ -66,6 +81,32 @@ class SynaplanClient
             'summaryType' => $summaryType,
             'length' => $length,
             'outputLanguage' => $outputLanguage,
+        ]);
+    }
+
+    /**
+     * Translate a whole document into one language.
+     *
+     * The request is always Synaplan's translation mode. A Synaplan that
+     * answered and does not list that mode is refused here: a summary in the
+     * target language is not a translation. When the capability list cannot
+     * be read, the translation request is still sent.
+     *
+     * @return array<string, mixed>
+     * @throws FailureException when this Synaplan cannot translate, or the person has no key
+     * @throws \Exception on API error
+     */
+    public function translate(string $text, string $targetLanguage): array
+    {
+        $this->requireApiKey();
+        if ($this->knownSummaryTypesMiss('translation')) {
+            throw FailureException::translationUnavailable();
+        }
+
+        return $this->request('POST', '/api/v1/summary/generate', [
+            'text' => $text,
+            'summaryType' => 'translation',
+            'outputLanguage' => $targetLanguage,
         ]);
     }
 
@@ -305,7 +346,7 @@ class SynaplanClient
         return [
             'in_knowledge' => $status !== 'missing',
             'stale' => $status === 'stale',
-            'synaplan_file_id' => is_array($row) ? ($row['file_id'] ?? null) : null,
+            'synaplan_file_id' => is_array($row) && isset($row['file_id']) ? (int) $row['file_id'] : null,
         ];
     }
 
@@ -335,6 +376,8 @@ class SynaplanClient
      *                                  marks the knowledge copy stale.
      * @param bool        $overwrite    Replace the existing knowledge file for this
      *                                  (source, source_id) instead of creating a duplicate.
+     * @param string|null $apiKey       A person's credential for work done while they are
+     *                                  not signed in; null uses the current request's.
      * @return array<string, mixed>
      * @throws \Exception on API error
      */
@@ -347,6 +390,7 @@ class SynaplanClient
         ?string $sourceId = null,
         ?string $sourceEtag = null,
         bool $overwrite = false,
+        ?string $apiKey = null,
     ): array {
         $client = $this->clientService->newClient();
         $url = $this->getBaseUrl() . '/api/v1/files/upload';
@@ -386,20 +430,19 @@ class SynaplanClient
         }
 
         $options = [
-            'headers' => [
-                'X-API-Key' => $this->getApiKey(),
+            'headers' => SynaplanCredential::header($apiKey !== null && $apiKey !== '' ? $apiKey : $this->requireApiKey()) + [
                 'Accept' => 'application/json',
             ],
             'multipart' => $multipart,
-            'timeout' => 180,
+            'timeout' => self::MEDIA_TIMEOUT,
         ];
 
         try {
             $response = $client->post($url, $options);
-            $decoded = json_decode($response->getBody(), true);
+            $decoded = json_decode((string) $response->getBody(), true);
 
             if (!is_array($decoded)) {
-                throw new \RuntimeException('Invalid JSON response from Synaplan API');
+                throw FailureException::invalidSynaplanAnswer();
             }
 
             return $decoded;
@@ -409,7 +452,7 @@ class SynaplanClient
                 'message' => $e->getMessage(),
             ]);
 
-            throw $e;
+            throw $this->refusedKey($e) ?? $e;
         }
     }
 
@@ -437,8 +480,7 @@ class SynaplanClient
         $url = $this->getBaseUrl() . '/api/v1/media/generate';
 
         $options = [
-            'headers' => [
-                'X-API-Key' => $this->getApiKey(),
+            'headers' => SynaplanCredential::header($this->requireApiKey()) + [
                 'Accept' => 'application/json',
                 'Content-Type' => 'application/json',
             ],
@@ -448,10 +490,10 @@ class SynaplanClient
 
         try {
             $response = $client->post($url, $options);
-            $decoded = json_decode($response->getBody(), true);
+            $decoded = json_decode((string) $response->getBody(), true);
 
             if (!is_array($decoded)) {
-                throw new \RuntimeException('Invalid JSON response from Synaplan API');
+                throw FailureException::invalidSynaplanAnswer();
             }
 
             return $decoded;
@@ -462,7 +504,7 @@ class SynaplanClient
                 'type' => $type,
             ]);
 
-            throw $e;
+            throw $this->refusedKey($e) ?? $e;
         }
     }
 
@@ -475,13 +517,14 @@ class SynaplanClient
      */
     public function downloadFile(string $relativePath): string
     {
+        if (!self::isSynaplanPath($relativePath)) {
+            throw new \InvalidArgumentException('Not a Synaplan path: ' . $relativePath);
+        }
         $client = $this->clientService->newClient();
         $url = $this->getBaseUrl() . $relativePath;
 
         $options = [
-            'headers' => [
-                'X-API-Key' => $this->getApiKey(),
-            ],
+            'headers' => SynaplanCredential::header($this->requireApiKey()),
             'timeout' => self::MEDIA_TIMEOUT,
         ];
 
@@ -496,8 +539,22 @@ class SynaplanClient
                 'path' => $relativePath,
             ]);
 
-            throw $e;
+            throw $this->refusedKey($e) ?? $e;
         }
+    }
+
+    /**
+     * Whether $path stays on the Synaplan host once appended to its base URL.
+     * Without the leading slash a value like ".example.org/x" or "@example.org"
+     * would move the request, and the credential, to another host. Spaces,
+     * control characters and backslashes are refused before any URL parser
+     * reads them.
+     */
+    public static function isSynaplanPath(string $path): bool
+    {
+        return str_starts_with($path, '/')
+            && !str_starts_with($path, '//')
+            && preg_match('/[\x00-\x20\x7f\\\\]/', $path) !== 1;
     }
 
     /**
@@ -514,16 +571,24 @@ class SynaplanClient
     }
 
     /**
-     * The API key to use for the CURRENT request.
+     * The address people open in the browser (falls back to the API URL).
+     */
+    public function getPublicBaseUrl(): string
+    {
+        return $this->synaplanConfig->getPublicBaseUrl();
+    }
+
+    /**
+     * The credential to use for the CURRENT request.
      *
-     * In per-user mode this is the logged-in ownCloud.online user's own Synaplan key
-     * (provisioned + minted on first use, AFTER the user activates AI). If the
-     * user has no key yet an EMPTY key is returned on purpose: the request then
-     * fails (401) rather than silently falling back to the shared admin key,
-     * which would break both isolation and the consent gate. The admin key is
-     * used only internally for provisioning (see UserAccountService).
+     * In the per-user modes this is the logged-in person's own Synaplan
+     * credential. If the person has none yet — because they have not
+     * consented or connected, or provisioning failed — it is EMPTY on
+     * purpose, never the shared admin key, which would break both isolation
+     * and the consent gate. The admin key is used only internally for
+     * provisioning (see UserAccountService).
      *
-     * In shared-key mode (per-user off) the single install-wide key is used.
+     * In shared mode the single install-wide key is used.
      */
     public function getApiKey(): string
     {
@@ -535,18 +600,144 @@ class SynaplanClient
     }
 
     /**
+     * True when Synaplan answered and its summary types do not include $type.
+     * An unreadable answer is not a refusal: the request is still sent.
+     */
+    private function knownSummaryTypesMiss(string $type): bool
+    {
+        $summary = $this->capabilities()['summary'] ?? null;
+        $types = is_array($summary) ? ($summary['types'] ?? null) : null;
+
+        return is_array($types) && !in_array($type, $types, true);
+    }
+
+    /**
+     * Whether files can be translated here: not when Synaplan answered
+     * without the translation mode.
+     */
+    public function offersTranslation(): bool
+    {
+        return !$this->knownSummaryTypesMiss('translation');
+    }
+
+    /**
+     * What the connected Synaplan supports, kept in the server's cache for
+     * each Synaplan address. The endpoint is public and is called without the
+     * user's key: Synaplan refuses a restricted key on any path outside its
+     * scopes.
+     *
+     * @return array<string, mixed>
+     */
+    public function capabilities(): array
+    {
+        if ($this->capabilities !== null) {
+            return $this->capabilities;
+        }
+        $cache = $this->cacheFactory->create(Application::APP_ID);
+        $key = 'capabilities/' . md5($this->getBaseUrl());
+        $cached = $cache->get($key);
+        if (is_array($cached)) {
+            return $this->capabilities = $cached;
+        }
+
+        try {
+            $response = $this->clientService->newClient()->get($this->getBaseUrl() . '/api/v1/config/capabilities', [
+                'headers' => ['Accept' => 'application/json'],
+                'timeout' => self::CAPABILITIES_TIMEOUT,
+            ]);
+            $decoded = json_decode((string) $response->getBody(), true);
+            $this->capabilities = is_array($decoded) ? $decoded : [];
+        } catch (\Exception $e) {
+            $this->logger->warning('Synaplan capabilities could not be read: {message}', [
+                'app' => Application::APP_ID,
+                'message' => $e->getMessage(),
+            ]);
+            $this->capabilities = [];
+        }
+        $cache->set($key, $this->capabilities, $this->capabilities === [] ? self::CAPABILITIES_RETRY_TTL : self::CAPABILITIES_TTL);
+
+        return $this->capabilities;
+    }
+
+    /**
+     * The current request's credential, or the failure that says what the
+     * person can do: connect their account (link mode), activate AI, or ask
+     * the administrator because provisioning failed. Nothing is sent without
+     * a credential.
+     *
+     * @throws FailureException
+     */
+    public function requireApiKey(): string
+    {
+        $key = $this->getApiKey();
+        if ($key !== '' || !$this->synaplanConfig->isPerUserAccountsEnabled()) {
+            return $key;
+        }
+        if ($this->synaplanConfig->isLinkMode()) {
+            throw FailureException::notConnected();
+        }
+
+        if (!$this->userAccounts->hasConsentForCurrentUser()) {
+            throw FailureException::consentRequired();
+        }
+        $problem = $this->userAccounts->provisioningFailure();
+        if ($problem !== null) {
+            throw new FailureException($problem, 'No Synaplan key for a user who activated AI: ' . $problem->code);
+        }
+
+        throw FailureException::accountUnavailable();
+    }
+
+    /**
+     * Synaplan refused the person's credential in a request that is not
+     * repeated (a stream, an upload, media): forget it and say what to do. A
+     * linked person has to connect again; a provisioned one gets a new key
+     * with the next request.
+     */
+    public function keyRefused(): Failure
+    {
+        if (!$this->synaplanConfig->isPerUserAccountsEnabled()) {
+            return new Failure(Http::STATUS_BAD_GATEWAY, Failure::SYNAPLAN_KEY_REJECTED);
+        }
+        $this->userAccounts->clearCurrentUserApiKey();
+        if (!$this->synaplanConfig->isLinkMode()) {
+            return new Failure(Http::STATUS_BAD_GATEWAY, Failure::SYNAPLAN_ERROR);
+        }
+        $this->userAccounts->clearLinkPrefs();
+
+        return FailureException::connectionEnded()->failure;
+    }
+
+    /**
+     * The failure for a 401 in the per-user modes, null for anything else.
+     */
+    private function refusedKey(\Exception $e): ?FailureException
+    {
+        if (!$this->isUnauthorized($e) || !$this->synaplanConfig->isPerUserAccountsEnabled()) {
+            return null;
+        }
+
+        return new FailureException($this->keyRefused(), 'Synaplan refused the key: ' . $e->getMessage());
+    }
+
+    /**
      * @param array<string, mixed>|null $body
+     * @param bool $requiresKey false for public routes, which work without an account
+     * @param array<string, scalar> $query
      * @return array<string, mixed>
      * @throws \Exception on HTTP or decode error
      */
-    private function request(string $method, string $path, ?array $body = null): array
+    private function request(string $method, string $path, ?array $body = null, bool $requiresKey = true, array $query = []): array
     {
         $client = $this->clientService->newClient();
         $url = $this->getBaseUrl() . $path;
+        if ($query !== []) {
+            $url .= '?' . http_build_query($query);
+        }
 
+        $credential = $requiresKey ? $this->requireApiKey() : $this->getApiKey();
         $options = [
-            'headers' => [
-                'X-API-Key' => $this->getApiKey(),
+            'headers' => ($credential !== '' ? SynaplanCredential::header($credential) : []) + [
                 'Accept' => 'application/json',
             ],
             'timeout' => self::TIMEOUT,
@@ -559,28 +750,61 @@ class SynaplanClient
 
         try {
             $response = $this->doRequest($client, $method, $url, $options);
-            $decoded = json_decode($response->getBody(), true);
+            $decoded = json_decode((string) $response->getBody(), true);
 
             if (!is_array($decoded)) {
-                throw new \RuntimeException('Invalid JSON response from Synaplan API');
+                throw FailureException::invalidSynaplanAnswer();
             }
 
             return $decoded;
         } catch (\Exception $e) {
-            // Self-heal a stale/revoked per-user key: drop it and retry once so
-            // the next getApiKey() re-provisions + re-mints. Only meaningful in
-            // per-user mode; the install-wide key path never re-mints.
+            // Self-heal a stale/revoked per-user key. In provision mode, drop
+            // it and retry once so the next getApiKey() re-provisions. In
+            // link mode a 401 means the person disconnected — clear prefs and
+            // do not remint (the UI shows Connect again).
             if ($this->isUnauthorized($e) && $this->synaplanConfig->isPerUserAccountsEnabled()) {
                 $this->userAccounts->clearCurrentUserApiKey();
-                $options['headers']['X-API-Key'] = $this->getApiKey();
+                if ($this->synaplanConfig->isLinkMode()) {
+                    $this->userAccounts->clearLinkPrefs();
+                    $this->logger->info('Synaplan refused the linked credential, the user has to connect again: {message}', [
+                        'app' => Application::APP_ID,
+                        'message' => $e->getMessage(),
+                        'method' => $method,
+                        'path' => $path,
+                    ]);
+
+                    throw FailureException::connectionEnded();
+                }
                 try {
+                    $options['headers'] = SynaplanCredential::header($this->requireApiKey()) + array_diff_key($options['headers'], ['X-API-Key' => 1, 'Authorization' => 1]);
                     $response = $this->doRequest($this->clientService->newClient(), $method, $url, $options);
-                    $decoded = json_decode($response->getBody(), true);
+                    $decoded = json_decode((string) $response->getBody(), true);
                     if (is_array($decoded)) {
                         return $decoded;
                     }
+                    $e = FailureException::invalidSynaplanAnswer();
                 } catch (\Exception $retry) {
-                    $e = $retry;
+                    $e = $this->isUnauthorized($retry) ? FailureException::accountUnavailable() : $retry;
+                }
+            }
+
+            // A provisioned key minted before watching, or before memories were
+            // offered, answers 403 insufficient_scope. Mint a replacement once,
+            // keeping consent, and repeat this call.
+            if ($this->isInsufficientScope($e) && $this->synaplanConfig->isPerUserAccountsEnabled() && !$this->synaplanConfig->isLinkMode()) {
+                $renewed = $this->userAccounts->renewProvisionedKey();
+                if (is_string($renewed) && $renewed !== '') {
+                    try {
+                        $options['headers'] = SynaplanCredential::header($renewed) + array_diff_key($options['headers'], ['X-API-Key' => 1, 'Authorization' => 1]);
+                        $response = $this->doRequest($this->clientService->newClient(), $method, $url, $options);
+                        $decoded = json_decode((string) $response->getBody(), true);
+                        if (is_array($decoded)) {
+                            return $decoded;
+                        }
+                        $e = FailureException::invalidSynaplanAnswer();
+                    } catch (\Exception $retry) {
+                        $e = $retry;
+                    }
                 }
             }
 
@@ -596,24 +820,37 @@ class SynaplanClient
     }
 
     /**
-     * Best-effort detection of an HTTP 401 from the ownCloud.online HTTP client
-     * exception (the underlying Guzzle exception message carries the status).
+     * Whether Synaplan answered 401. The ownCloud.online HTTP client throws
+     * Guzzle's exceptions, which carry the HTTP status as their code. The
+     * message holds the URL and transport errors, so a "401" in it proves
+     * nothing.
      */
     private function isUnauthorized(\Exception $e): bool
     {
-        if ($e->getCode() === 401) {
-            return true;
+        return $e->getCode() === Http::STATUS_UNAUTHORIZED;
+    }
+
+    /**
+     * Synaplan answered 403 with the machine code insufficient_scope. The
+     * message of the exception carries the URL, so only the response body counts.
+     */
+    private function isInsufficientScope(\Exception $e): bool
+    {
+        if ($e->getCode() !== Http::STATUS_FORBIDDEN || !method_exists($e, 'getResponse')) {
+            return false;
+        }
+        $response = $e->getResponse();
+        if (!is_object($response) || !method_exists($response, 'getBody')) {
+            return false;
         }
 
-        $message = $e->getMessage();
-
-        return str_contains($message, '401') || stripos($message, 'Unauthorized') !== false;
+        return str_contains((string) $response->getBody(), '"insufficient_scope"');
     }
 
     /**
      * @param array<string, mixed> $options
      */
-    private function doRequest(IClient $client, string $method, string $url, array $options): \OCP\Http\Client\IResponse
+    private function doRequest(IClient $client, string $method, string $url, array $options): IResponse
     {
         return match (strtoupper($method)) {
             'GET' => $client->get($url, $options),

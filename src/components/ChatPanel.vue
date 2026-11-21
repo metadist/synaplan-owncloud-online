@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { api, chatStream, type ClientConfig, type FileGroup, type ModelInfo } from '../shared/api'
+import { api, chatStream, type ClientConfig, type ConsentState, type FileGroup, type ModelInfo } from '../shared/api'
+import { isBlocked, loadConsent } from '../shared/consent'
+import { describeFailure, failureFromError, type Failure } from '../shared/failures'
 import { renderMarkdown } from '../shared/markdown'
 import { injectModalStyles } from '../shared/mount'
 import { notify, translate as t } from '../shared/oc'
+import ConsentCard from './ConsentCard.vue'
+import FailureNote from './FailureNote.vue'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   html: string
   media?: { url: string; proxyUrl: string; type: string; filename: string }
-  error?: boolean
+  failure?: Failure
 }
 
 const props = withDefaults(
@@ -39,9 +43,9 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
 
-const consentRequired = ref(false)
-const consentGranted = ref(true)
-const initError = ref('')
+const consent = ref<ConsentState | null>(null)
+const blocked = computed(() => isBlocked(consent.value))
+const initFailure = ref<Failure | null>(null)
 
 const scrollEl = ref<HTMLElement | null>(null)
 
@@ -55,19 +59,12 @@ onMounted(async () => {
   // when ChatPanel is rendered outside a modal (research page, launcher).
   injectModalStyles()
 
-  try {
-    const consent = await api.getConsent()
-    consentRequired.value = consent.required
-    consentGranted.value = consent.granted
-  } catch {
-    consentRequired.value = false
-    consentGranted.value = true
-  }
+  consent.value = await loadConsent()
 
   try {
     config.value = await api.getClientConfig()
   } catch (e) {
-    initError.value = e instanceof Error ? e.message : String(e)
+    initFailure.value = failureFromError(e)
   }
 
   // Models + groups are best-effort; the chat still works without them.
@@ -88,13 +85,15 @@ onMounted(async () => {
   }
 })
 
-async function activateAi(): Promise<void> {
+async function onGranted(): Promise<void> {
+  if (consent.value) {
+    consent.value = { ...consent.value, granted: true }
+  }
+  initFailure.value = null
   try {
-    const res = await api.setConsent(true)
-    consentGranted.value = res.granted
     config.value = await api.getClientConfig()
   } catch (e) {
-    initError.value = e instanceof Error ? e.message : String(e)
+    initFailure.value = failureFromError(e)
   }
 }
 
@@ -146,9 +145,7 @@ async function send(): Promise<void> {
       assistant.html = renderMarkdown(assistant.text)
     }
   } catch (e) {
-    assistant.error = true
-    assistant.text = e instanceof Error ? e.message : String(e)
-    assistant.html = renderMarkdown(assistant.text)
+    assistant.failure = failureFromError(e)
   } finally {
     sending.value = false
     scrollToBottom()
@@ -157,14 +154,21 @@ async function send(): Promise<void> {
 
 async function generateMedia(type: 'image' | 'video', prompt: string): Promise<void> {
   sending.value = true
-  const assistant: ChatMessage = { role: 'assistant', text: t('Generating {type}…', { type }), html: '' }
+  const assistant: ChatMessage = {
+    role: 'assistant',
+    text: type === 'image' ? t('Generating an image…') : t('Generating a video…'),
+    html: '',
+  }
   assistant.html = renderMarkdown(assistant.text)
   messages.value.push(assistant)
   scrollToBottom()
   try {
     const res = await api.generateMedia(prompt, type)
     if (!res.success || !res.file) {
-      throw new Error(t('Media generation failed'))
+      assistant.text = ''
+      assistant.html = ''
+      assistant.failure = describeFailure('synaplan_error')
+      return
     }
     const filename = prompt.slice(0, 40).replace(/[^\w\-]+/g, '_') + (type === 'image' ? '.png' : '.mp4')
     assistant.text = ''
@@ -176,9 +180,9 @@ async function generateMedia(type: 'image' | 'video', prompt: string): Promise<v
       filename,
     }
   } catch (e) {
-    assistant.error = true
-    assistant.text = e instanceof Error ? e.message : String(e)
-    assistant.html = renderMarkdown(assistant.text)
+    assistant.text = ''
+    assistant.html = ''
+    assistant.failure = failureFromError(e)
   } finally {
     sending.value = false
     scrollToBottom()
@@ -190,7 +194,7 @@ async function saveMedia(m: NonNullable<ChatMessage['media']>): Promise<void> {
     const res = await api.saveMedia(m.url, m.filename)
     notify(t('Saved to {folder}', { folder: res.folder }))
   } catch (e) {
-    notify(e instanceof Error ? e.message : String(e))
+    notify(failureFromError(e).text)
   }
 }
 
@@ -207,7 +211,7 @@ function onKeydown(e: KeyboardEvent): void {
     <div class="synaplan-chat-header">
       <div class="synaplan-chat-title">
         <strong>{{ t('Synaplan AI') }}</strong>
-        <span v-if="fileName" class="oco-sub">· {{ fileName }}</span>
+        <span v-if="fileName" class="oco-sub"> · {{ fileName }}</span>
       </div>
       <button v-if="compact" class="synaplan-chat-close" :title="t('Close')" @click="emit('close')">×</button>
     </div>
@@ -220,14 +224,13 @@ function onKeydown(e: KeyboardEvent): void {
       <span v-if="useMemories && memoryAvailable">🧠 {{ t('memories') }}</span>
     </div>
 
-    <div v-if="consentRequired && !consentGranted" class="synaplan-consent">
-      <p>{{ t('Using AI creates a personal Synaplan account for you. Activate it to continue.') }}</p>
-      <button class="oco-btn primary" @click="activateAi">{{ t('Activate AI') }}</button>
+    <div v-if="blocked && consent" class="synaplan-consent">
+      <ConsentCard :state="consent" :dismissable="compact" @granted="onGranted" @close="emit('close')" />
     </div>
 
     <template v-else>
       <div ref="scrollEl" class="synaplan-chat-messages">
-        <p v-if="initError" class="oco-error">{{ initError }}</p>
+        <FailureNote :failure="initFailure" />
         <p v-if="messages.length === 0" class="oco-sub synaplan-empty">
           {{ t('Ask anything. Use /pic or /vid to generate media.') }}
         </p>
@@ -235,9 +238,10 @@ function onKeydown(e: KeyboardEvent): void {
           v-for="(m, i) in messages"
           :key="i"
           class="synaplan-msg"
-          :class="{ user: m.role === 'user', assistant: m.role === 'assistant', error: m.error }"
+          :class="{ user: m.role === 'user', assistant: m.role === 'assistant', failed: !!m.failure }"
         >
-          <template v-if="m.media">
+          <FailureNote v-if="m.failure" :failure="m.failure" />
+          <template v-else-if="m.media">
             <img v-if="m.media.type === 'image'" :src="m.media.proxyUrl" class="synaplan-media" :alt="t('Generated image')" />
             <video v-else :src="m.media.proxyUrl" class="synaplan-media" controls />
             <div>
@@ -318,8 +322,7 @@ function onKeydown(e: KeyboardEvent): void {
   color: var(--color-text-maxcontrast, #767676);
 }
 .synaplan-consent {
-  padding: 24px 8px;
-  text-align: center;
+  padding: 16px 8px;
 }
 .synaplan-chat-messages {
   flex: 1;
@@ -349,9 +352,9 @@ function onKeydown(e: KeyboardEvent): void {
   align-self: flex-start;
   background: var(--color-background-dark, #f0f0f0);
 }
-.synaplan-msg.error {
-  background: var(--color-error, #c0392b);
-  color: #fff;
+.synaplan-msg.failed {
+  background: none;
+  padding: 0;
 }
 .synaplan-msg-content :first-child { margin-top: 0; }
 .synaplan-msg-content :last-child { margin-bottom: 0; }

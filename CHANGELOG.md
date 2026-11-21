@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **How do people here use Synaplan?** in the admin screen, with the modes of
+  the Nextcloud app: connect your Synaplan account, accounts created by the
+  administrator, one shared account. Organisation login is shown as not
+  available on ownCloud.online. Settings of 1.0.0 move over on upgrade.
+- **Connect your Synaplan account**: each person connects an account they
+  already have (OAuth 2 with PKCE and pushed authorization requests) and sees
+  or ends the connection under Settings → Personal → Synaplan.
+- **Register this instance** with Synaplan from the admin screen (dynamic
+  client registration, with the registration code when Synaplan asks for one).
+- The consent card before the first action whenever a person's own Synaplan
+  account is used.
+- One sentence per failure, with a link to the page that fixes it.
+- The chat launcher on every page for signed-in people.
+
+### Changed
+
+- **Add to Knowledge** is now **Make searchable by AI**.
+- Summarize, Translate and Make searchable by AI appear only on files Synaplan
+  can read.
+- Keys are stored encrypted. A key 1.0.0 stored in plain text is encrypted on
+  first use.
+
+### Fixed
+
+- Coming back from Synaplan no longer signs the person out when the browser
+  treats Synaplan as another site.
+- Chat answers render Markdown without running HTML from the answer.
+- Saving or showing generated media only fetches paths on the Synaplan host, so
+  the key is never sent to another server.
+
 ## [1.0.0] - 2026-07-15
 
 Initial release — the Synaplan integration for BW-Tech ownCloud.online 11.0.10,

@@ -114,7 +114,7 @@ clean: ## Remove build artifacts
 package: build ## Create an installable app tarball
 	rm -rf $(build_dir)
 	mkdir -p $(build_dir)/$(app_name)
-	cp -r appinfo lib templates img js $(build_dir)/$(app_name)/
+	cp -r appinfo lib templates img js public $(build_dir)/$(app_name)/
 	test -d l10n && cp -r l10n $(build_dir)/$(app_name)/ || true
 	cp CHANGELOG.md LICENSE README.md $(build_dir)/$(app_name)/ 2>/dev/null || true
 	cd $(build_dir) && tar -czf ../../$(app_name).tar.gz $(app_name)

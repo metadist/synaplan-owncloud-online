@@ -15,6 +15,7 @@ const entries = {
   'chat-launcher': 'src/chat-launcher.ts',
   research: 'src/research.ts',
   settings: 'src/settings.ts',
+  'personal-settings': 'src/personal-settings.ts',
 }
 
 const watch = process.argv.includes('--watch')
@@ -22,6 +23,8 @@ const watch = process.argv.includes('--watch')
 for (const [name, entry] of Object.entries(entries)) {
   await build({
     configFile: false,
+    // public/ holds pages ownCloud.online serves as they are, not build input.
+    publicDir: false,
     logLevel: 'info',
     define: {
       'process.env.NODE_ENV': JSON.stringify('production'),

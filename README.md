@@ -10,21 +10,30 @@ talks to the **Synaplan backend API**.
 - **Summarize** — generate document summaries from the file context menu
   (bullet points, paragraph, or key sentences; adjustable length and language).
 - **Translate** — translate files to another language from the context menu.
-- **Add to Knowledge** — upload files to the Synaplan RAG knowledge base for
-  semantic search and chat, with group selection and in-place updates.
+- **Make searchable by AI** — send a file to Synaplan so the AI can find it
+  when you ask a question; pick the knowledge folder, update it after the file
+  changes, or remove it again.
 - **Research Chat** — a full-page AI assistant **and** a floating in-page
   launcher, with knowledge-group and model selection, streaming answers, and
   optional personal memories. `/pic` and `/vid` generate images and videos when
   the corresponding models are configured, with one-click "Save to Files".
 - **Configurable answer language** — set a default and optionally follow each
   user's ownCloud.online interface language.
-- **Per-user Synaplan accounts** — optional mode where each user activates AI
-  once (consent gate) and gets an isolated, provisioned Synaplan account/key.
+- **How people use Synaplan** — the administrator picks one of the modes the
+  Nextcloud app offers: *Connect your Synaplan account* (each person connects
+  an account they already have), *Accounts created by the administrator* (this
+  server creates a Synaplan account per person) or *One shared account*.
+  *Organisation login* is not available on ownCloud.online. With a personal
+  account, each person agrees once before anything is sent to Synaplan.
+- Summarize, Translate and Make searchable by AI appear only on files Synaplan
+  can read; failures say what happened and where to fix it.
 
 ## Requirements
 
-- BW-Tech ownCloud.online 11.0.10 (PHP 8.4)
-- A running [Synaplan](https://synaplan.com) instance with a valid API key
+- BW-Tech ownCloud.online 11.0.10 or a newer 11.0 release (PHP 8.4)
+- A running [Synaplan](https://synaplan.com) 5.8 or newer: an API key for one
+  shared account, an administrator's API key to create accounts, and for
+  connected accounts a registration of this server (see Configuration)
 
 ## Installation
 
@@ -53,10 +62,18 @@ make package       # produces oco_synaplan.tar.gz
 
 1. Go to **Settings → Admin → Synaplan**.
 2. Pick the active backend (**Live** or **Local**) and enter the Synaplan URL
-   and API key.
-3. Click **Test connection** to verify.
-4. Optionally set the default answer language and enable memories / per-user
-   accounts.
+   as this server reaches it, the address people open in the browser when it
+   differs, and the API key.
+3. Choose **How do people here use Synaplan?** and click **Save**.
+4. For *Connect your Synaplan account* or *Accounts created by the
+   administrator*, click **Register this instance** once. With the
+   registration code from the Synaplan administrator it is active at once;
+   without one it may wait for their approval.
+5. Click **Test connection** to verify, and optionally set the default answer
+   language and memories.
+
+Connected people manage their connection under **Settings → Personal →
+Synaplan**.
 
 ## Development
 
@@ -122,6 +139,12 @@ ownCloud.online loads app scripts as classic `<script>` tags. Entry points:
 | `chat-launcher.js`  | Files app                          | Floating chat launcher button            |
 | `research.js`       | `/apps/oco_synaplan/research` page | Full-page research chat                  |
 | `settings.js`       | Admin → Synaplan section           | Admin settings panel                     |
+| `personal-settings.js` | Personal → Synaplan section     | Connect, disconnect and the connection state |
+
+`public/link-return.html` is the page Synaplan sends a person back to after
+connecting. It forwards to the callback from this server's own origin, because
+the session passphrase cookie of ownCloud.online is `SameSite=Strict` and would
+not travel on a redirect from Synaplan (see `docs/CF-S4.md`).
 
 ## Architecture
 

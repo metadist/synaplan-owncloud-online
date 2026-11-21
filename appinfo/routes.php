@@ -18,6 +18,9 @@ return [
         ['name' => 'settings#getSettings', 'url' => '/api/v1/settings', 'verb' => 'GET'],
         ['name' => 'settings#saveSettings', 'url' => '/api/v1/settings', 'verb' => 'PUT'],
         ['name' => 'settings#testConnection', 'url' => '/api/v1/settings/test', 'verb' => 'POST'],
+        ['name' => 'settings#registerInstance', 'url' => '/api/v1/settings/register-instance', 'verb' => 'POST'],
+        ['name' => 'settings#forgetInstance', 'url' => '/api/v1/settings/forget-instance', 'verb' => 'POST'],
+        ['name' => 'settings#instanceStatus', 'url' => '/api/v1/settings/instance-status', 'verb' => 'GET'],
 
         // Document AI API
         ['name' => 'api#summarize', 'url' => '/api/v1/summarize/{fileId}', 'verb' => 'POST'],
@@ -32,10 +35,18 @@ return [
 
         // Client runtime config (language + memory availability) for the chat UI
         ['name' => 'api#clientConfig', 'url' => '/api/v1/client-config', 'verb' => 'GET'],
+        // What the Files app offers, by what the connected Synaplan supports
+        ['name' => 'api#features', 'url' => '/api/v1/features', 'verb' => 'GET'],
 
-        // Per-user "Activate AI" consent (per-user mode only)
+        // Per-user consent (per-user modes only)
         ['name' => 'consent#getConsent', 'url' => '/api/v1/ai-consent', 'verb' => 'GET'],
         ['name' => 'consent#setConsent', 'url' => '/api/v1/ai-consent', 'verb' => 'POST'],
+
+        // Connecting a person's own Synaplan account (link mode)
+        ['name' => 'link#start', 'url' => '/link/start', 'verb' => 'GET'],
+        ['name' => 'link#callback', 'url' => '/link/callback', 'verb' => 'GET'],
+        ['name' => 'link#disconnect', 'url' => '/link/disconnect', 'verb' => 'POST'],
+        ['name' => 'link#status', 'url' => '/api/v1/link/status', 'verb' => 'GET'],
 
         // Admin control panel: activated AI users (admin-only)
         ['name' => 'adminAiUsers#list', 'url' => '/api/v1/admin/ai-users', 'verb' => 'GET'],

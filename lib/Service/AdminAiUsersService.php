@@ -25,6 +25,7 @@ class AdminAiUsersService
         private IConfig $config,
         private IUserManager $userManager,
         private UserAccountService $userAccounts,
+        private PlatformLinkService $platformLinks,
     ) {
     }
 
@@ -34,7 +35,7 @@ class AdminAiUsersService
      * Efficient at scale: queries only the users who hold the consent flag
      * (getUsersForUserValue), never the full user base.
      *
-     * @return list<array{uid: string, displayName: string, email: string, synaplanUserId: int|null, hasKey: bool, consentAt: string}>
+     * @return list<array{uid: string, displayName: string, email: string, synaplanUserId: int|null, hasKey: bool, consentAt: string, kind: string|null}>
      */
     public function listActivatedUsers(): array
     {
@@ -43,15 +44,15 @@ class AdminAiUsersService
         $out = [];
         foreach ($uids as $uid) {
             $user = $this->userManager->get($uid);
-            $key = $this->config->getUserValue($uid, Application::APP_ID, 'synaplan_user_api_key', '');
 
             $out[] = [
                 'uid' => $uid,
                 'displayName' => $user !== null ? $user->getDisplayName() : $uid,
                 'email' => $user !== null ? (string) $user->getEMailAddress() : '',
                 'synaplanUserId' => $this->userAccounts->getSynaplanUserId($uid),
-                'hasKey' => $key !== '',
+                'hasKey' => $this->userAccounts->holdsCredential($uid),
                 'consentAt' => $this->config->getUserValue($uid, Application::APP_ID, 'ai_consent_at', ''),
+                'kind' => $this->userAccounts->getLinkKind($uid),
             ];
         }
 
@@ -61,11 +62,13 @@ class AdminAiUsersService
     }
 
     /**
-     * Admin: deactivate AI for a user (withdraw consent + forget their key).
+     * Admin: deactivate AI for a user. Their key is revoked in Synaplan,
+     * whether they connected their own account or the app created it, then
+     * consent and key are forgotten here.
      */
     public function deactivate(string $uid): void
     {
-        $this->userAccounts->deactivateUser($uid);
+        $this->platformLinks->disconnectUid($uid);
     }
 
     /**

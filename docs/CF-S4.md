@@ -208,6 +208,36 @@ file event is the walk from the node to the person's home plus one indexed
 `IN (…)` query over the ancestor ids, well under a millisecond, so the hooks
 can match inline and queue the upload as a job.
 
+## Other findings that shape the app
+
+Found while porting the link mode (CF1.1); the files are the same in both tags.
+
+- **The session cookie is `SameSite=Strict`.**
+  `lib/private/Session/CryptoWrapper.php:168` reads `http.cookie.samesite`
+  (default `Strict`) for `oc_sessionPassphrase`. A cross-site navigation, such
+  as Synaplan's redirect back after the person allows the connection, arrives
+  without that cookie, so `sendCookie()` (line 97) makes a new passphrase,
+  sends it to the browser, and the encrypted session can no longer be read:
+  the person is signed out, also for the next request. The redirect URI the
+  app registers is therefore a static page, `public/link-return.html`, that
+  runs no PHP and hops to the `link.callback` route; that same-site hop
+  carries the cookie. Reproduce it with the page on `localhost` and the
+  referring page on `127.0.0.1`, which browsers treat as different sites.
+- **Controllers close the session first.**
+  `lib/private/AppFramework/Middleware/SessionMiddleware.php:61–63` closes the
+  session before the controller runs unless the method is annotated
+  `@UseSession`. The link start (stores the PKCE verifier and state) and the
+  callback (reads them) carry it; nothing else writes to the session.
+- **The app container knows a fixed list of interfaces.**
+  `lib/private/AppFramework/DependencyInjection/DIContainer.php:79–345`
+  registers the OCP interfaces an app class may type-hint; anything else is
+  built by reflection (`lib/private/AppFramework/Utility/SimpleContainer.php:100`),
+  which fails for an interface and never asks the server container.
+  `OCP\Lock\ILockingProvider` (the lock around a refresh-token rotation) is
+  not in the list, so `lib/AppInfo/Application.php` registers it. Settings
+  panels and repair steps are built by the server container and see every
+  server service.
+
 ## Follow-up brief text
 
 - **CF2.8**: `instances/self` does not exist at the pinned Synaplan; the

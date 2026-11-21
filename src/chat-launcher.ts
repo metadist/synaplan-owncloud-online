@@ -1,6 +1,7 @@
 /**
  * Floating chat launcher. Adds a bottom-right button that opens the ChatPanel
- * in a modal overlay. Loaded in the Files app (see appinfo/app.php).
+ * in a modal overlay. Loaded on every page a signed-in person opens (see
+ * appinfo/app.php).
  */
 import ChatPanel from './components/ChatPanel.vue'
 import { injectModalStyles, openModal, type ModalHandle } from './shared/mount'
@@ -55,7 +56,9 @@ function createLauncher(): void {
       handle = null
       return
     }
-    handle = openModal(ChatPanel, { compact: true })
+    handle = openModal(ChatPanel, { compact: true }, () => {
+      handle = null
+    })
   })
   document.body.appendChild(btn)
 }

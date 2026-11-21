@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -28,6 +29,8 @@ use OCP\IUserSession;
  */
 class MediaController extends Controller
 {
+    use RespondsToFailures;
+
     private const SYNAPLAN_FOLDER = 'Synaplan';
 
     /**
@@ -97,15 +100,7 @@ class MediaController extends Controller
                 'model' => $result['model'] ?? 'unknown',
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('Media generation failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Media generation failed');
         }
     }
 
@@ -131,7 +126,7 @@ class MediaController extends Controller
         $mediaUrl = trim((string) ($data['mediaUrl'] ?? ''));
         $filename = trim((string) ($data['filename'] ?? ''));
 
-        if ($mediaUrl === '' || $filename === '') {
+        if ($mediaUrl === '' || $filename === '' || !SynaplanClient::isSynaplanPath($mediaUrl)) {
             return new JSONResponse(
                 ['success' => false, 'error' => 'mediaUrl and filename are required'],
                 Http::STATUS_BAD_REQUEST,
@@ -167,15 +162,7 @@ class MediaController extends Controller
 
             return new JSONResponse(['success' => true, 'path' => $savedPath, 'folder' => $targetFolderPath]);
         } catch (\Exception $e) {
-            $this->logger->error('Media save failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => 'Failed to save file: ' . $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Media save failed');
         }
     }
 
@@ -187,7 +174,7 @@ class MediaController extends Controller
      */
     public function proxy(string $url = ''): Http\Response
     {
-        if ($url === '') {
+        if ($url === '' || !SynaplanClient::isSynaplanPath($url)) {
             return new JSONResponse(['error' => 'url parameter is required'], Http::STATUS_BAD_REQUEST);
         }
 
@@ -209,12 +196,7 @@ class MediaController extends Controller
 
             return new DataDownloadResponse($content, $filename, $mimeType);
         } catch (\Exception $e) {
-            $this->logger->error('Media proxy failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(['error' => 'Failed to proxy file'], Http::STATUS_INTERNAL_SERVER_ERROR);
+            return $this->failed($e, 'Media proxy failed');
         }
     }
 

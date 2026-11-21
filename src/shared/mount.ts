@@ -26,7 +26,11 @@ export interface ModalHandle {
   close: () => void
 }
 
-export function openModal(component: Component, props: Record<string, unknown> = {}): ModalHandle {
+export function openModal(
+  component: Component,
+  props: Record<string, unknown> = {},
+  onClosed?: () => void,
+): ModalHandle {
   injectModalStyles()
 
   const backdrop = document.createElement('div')
@@ -45,6 +49,7 @@ export function openModal(component: Component, props: Record<string, unknown> =
     app.unmount()
     backdrop.remove()
     document.removeEventListener('keydown', onKey)
+    onClosed?.()
   }
 
   const onKey = (e: KeyboardEvent): void => {
