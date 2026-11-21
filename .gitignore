@@ -7,6 +7,10 @@
 *.tar.gz.sig
 /release-work/build/
 
+# Local dev stack (copy of docker-compose.dev.yml.example)
+/docker-compose.dev.yml
+/docker-compose.dev.yml.bak
+
 # Tooling caches
 .php-cs-fixer.cache
 .phpunit.cache/

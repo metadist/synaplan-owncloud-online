@@ -1,0 +1,30 @@
+# PHP and Apache for a BW-Tech ownCloud.online checkout that is bind-mounted
+# at /var/www/html. The extension list is the one BW-Tech's release workflow
+# installs (.github/workflows/release-owncloud-online.yml); the image itself
+# carries no ownCloud.online code.
+FROM php:8.4-apache@sha256:3550aedd1c7bdfe26283c7b1550ef76509e6c2b1284aef814e6f2e325b7c9688
+
+COPY --from=composer:2@sha256:50ea4d33fdcde1adb0f045547295faa1548b33872e5f789dae5b02ce2fb5de93 /usr/bin/composer /usr/local/bin/composer
+
+# Built into the base image: ctype curl dom fileinfo iconv json libxml mbstring
+# openssl pdo pdo_sqlite posix simplexml xml. Added here: apcu exif gd imagick
+# intl memcached pdo_mysql zip.
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		git unzip mariadb-client \
+		libfreetype6-dev libicu-dev libjpeg62-turbo-dev libmagickwand-dev \
+		libmemcached-dev libpng-dev libssl-dev libwebp-dev libzip-dev zlib1g-dev; \
+	docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp; \
+	docker-php-ext-install -j"$(nproc)" exif gd intl pdo_mysql zip; \
+	yes '' | pecl install apcu imagick memcached; \
+	docker-php-ext-enable apcu imagick memcached; \
+	a2enmod rewrite headers env dir mime setenvif; \
+	rm -rf /var/lib/apt/lists/* /tmp/pear
+
+COPY php.ini /usr/local/etc/php/conf.d/zz-owncloud-dev.ini
+COPY apache.conf /etc/apache2/conf-enabled/zz-owncloud-dev.conf
+COPY dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]
+CMD ["apache"]
