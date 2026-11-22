@@ -1,8 +1,6 @@
 import { expect, request } from '@playwright/test'
 import {
   APP,
-  davAs,
-  FILE,
   OCO_URL,
   ownCloudAs,
   resetPerson,
@@ -10,22 +8,13 @@ import {
   SYNAPLAN_ADMIN,
   SYNAPLAN_URL,
   synaplanAs,
+  uploadReview,
 } from './support'
 
 const READY_TIMEOUT_MS = 180_000
 
 /** The test people the journeys sign in as. */
 const PEOPLE = ['ada', 'carol']
-
-const REVIEW_TEXT = `Vendor review: Northwind Office Supplies
-
-Northwind delivered 96 of 100 orders on time this quarter. Two deliveries
-arrived damaged and were replaced within a week. Prices rose by 4 percent in
-March. The account manager answers within one working day.
-
-Recommendation: keep Northwind for another year and ask for a fixed price
-until December.
-`
 
 /** The initial access token the Synaplan test stack accepts (synaplan-test-stack.yml). */
 const REGISTRATION_TOKEN = 'owncloud-e2e-initial-access-token-0001'
@@ -116,12 +105,6 @@ export default async function globalSetup(): Promise<void> {
 
   for (const uid of PEOPLE) {
     await resetPerson(uid)
-    const dav = await davAs(uid)
-    const uploaded = await dav.put(`/remote.php/dav/files/${uid}/${FILE}`, {
-      data: REVIEW_TEXT,
-      headers: { 'Content-Type': 'text/plain' },
-    })
-    expect(uploaded.ok(), `uploading ${FILE} for ${uid}`).toBe(true)
-    await dav.dispose()
+    await uploadReview(uid)
   }
 }

@@ -13,10 +13,11 @@ declare(strict_types=1);
  */
 
 use OCA\OcoSynaplan\AppInfo\Application;
-use OCA\OcoSynaplan\Service\PlatformLinkService;
-use OCA\OcoSynaplan\Service\SynaplanConfig;
-use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Listener\UserDeletedListener;
+use OCA\OcoSynaplan\Listener\UserEnabledListener;
+use OCP\IUser;
 use OCP\Util;
+use Symfony\Component\EventDispatcher\GenericEvent;
 
 $app = new Application();
 $container = $app->getContainer();
@@ -36,25 +37,17 @@ if (!\OC::$CLI && \OC::$server->getUserSession()->getUser() !== null) {
     Util::addScript(Application::APP_ID, 'chat-launcher');
 }
 
-// A removed person takes their Synaplan connection with them. An account they
-// connected is theirs: only this server's grant or key ends. An account this
-// server created for them is deleted. Best-effort — neither call throws, so
-// neither can block ownCloud.online's own user deletion. preDelete keeps the
-// person's settings readable.
-\OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function ($user) use ($container) {
-    $uid = $user->getUID();
-    /** @var UserAccountService $accounts */
-    $accounts = $container->query(UserAccountService::class);
-    if ($accounts->wasLinked($uid) || $accounts->getLinkKind($uid) === UserAccountService::KIND_LINKED) {
-        /** @var PlatformLinkService $platformLinks */
-        $platformLinks = $container->query(PlatformLinkService::class);
-        $platformLinks->disconnectUid($uid);
-
-        return;
-    }
-    /** @var SynaplanConfig $config */
-    $config = $container->query(SynaplanConfig::class);
-    if ($config->isPerUserAccountsEnabled()) {
-        $accounts->deleteRemoteAccount($uid);
+// Synaplan hears when a person here is deleted, disabled or enabled again.
+\OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function (IUser $user) use ($container) {
+    /** @var UserDeletedListener $listener */
+    $listener = $container->query(UserDeletedListener::class);
+    $listener->handle($user);
+});
+$dispatcher->addListener('OC\User\User::postSetEnabled', function ($event) use ($container) {
+    $user = $event instanceof GenericEvent ? $event->getSubject() : null;
+    if ($user instanceof IUser) {
+        /** @var UserEnabledListener $listener */
+        $listener = $container->query(UserEnabledListener::class);
+        $listener->handle($user);
     }
 });

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Service;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
 use OCP\IConfig;
 use OCP\IUserManager;
 
@@ -62,12 +63,17 @@ class AdminAiUsersService
     }
 
     /**
-     * Admin: deactivate AI for a user. Their key is revoked in Synaplan,
-     * whether they connected their own account or the app created it, then
-     * consent and key are forgotten here.
+     * Admin: deactivate AI for a user. A provisioned person is paused at
+     * Synaplan and resumes on Activate; a connected person's grant is
+     * revoked, and they connect again. Consent is forgotten here either way.
+     *
+     * @throws FailureException when Synaplan could not pause the person
      */
     public function deactivate(string $uid): void
     {
+        if ($this->userAccounts->pauseProvisioned($uid)) {
+            return;
+        }
         $this->platformLinks->disconnectUid($uid);
     }
 

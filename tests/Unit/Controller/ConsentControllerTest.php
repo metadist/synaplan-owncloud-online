@@ -123,6 +123,19 @@ final class ConsentControllerTest extends TestCase
         self::assertSame('email_already_used', $response->getData()['error']);
     }
 
+    public function testAPausedPersonSynaplanWillNotResumeIsToldWhy(): void
+    {
+        $this->register();
+        $this->keys()->setUserKey('ada', 'sk_ada');
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::PAUSED_PREF, '1');
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(409, '{"error":"identity_revoked"}'));
+
+        $response = $this->controller()->setConsent(true);
+
+        self::assertSame([409, 'account_unavailable'], [$response->getStatus(), $response->getData()['error']]);
+        self::assertNull($this->config->userValue('ada', UserAccountService::CONSENT_PREF));
+    }
+
     private function linkModeWithAccounts(): void
     {
         $this->config->setAppValue('oco_synaplan', 'mode', 'link');

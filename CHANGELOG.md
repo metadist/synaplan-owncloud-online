@@ -17,6 +17,15 @@ All notable changes to this project are documented here. The format is based on
   or ends the connection under Settings → Personal → Synaplan.
 - **Register this instance** with Synaplan from the admin screen (dynamic
   client registration, with the registration code when Synaplan asks for one).
+- Synaplan hears when the administrator deletes, disables or enables a person.
+  Deleting ends their connection and deletes an account this server created
+  for them unless they also use it elsewhere; disabling pauses them until they
+  are enabled again.
+- **Deactivate** under AI Users pauses a person whose account this server
+  created; **Use Synaplan** resumes the same account and key, and connecting
+  their own Synaplan account replaces it.
+- Accounts created before this server registered are moved onto the
+  registration by an hourly background job, once per registration.
 - The consent card before the first action whenever a person's own Synaplan
   account is used.
 - One sentence per failure, with a link to the page that fixes it.

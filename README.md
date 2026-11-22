@@ -74,6 +74,25 @@ make package       # produces oco_synaplan.tar.gz
 Connected people manage their connection under **Settings → Personal →
 Synaplan**.
 
+### When the administrator changes a person
+
+Once this server is registered, Synaplan hears about it:
+
+- **Deleting** a person ends their connection. An account this server created
+  for them is deleted too, unless they also use it elsewhere (another cloud,
+  or a password of their own). An account a person connected stays theirs.
+- **Disabling** a person pauses them in Synaplan; **enabling** them resumes
+  the same connection or account.
+- **Deactivate** under **AI Users** pauses a person whose account this server
+  created; when they choose **Use Synaplan** again, the same account and key
+  resume, and when they connect their own Synaplan account instead, it
+  replaces that one. A connected person's grant is revoked, and they connect
+  again.
+
+Accounts this server created before it registered are moved onto the
+registration by an hourly background job, once per registration, so these
+rules reach them too. Background jobs run with cron (`occ system:cron`).
+
 ## Development
 
 PHP 8.4 with Composer, and Node 26 with npm 11, on the host.

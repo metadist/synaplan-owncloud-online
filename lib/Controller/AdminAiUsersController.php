@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\AdminAiUsersService;
 use OCP\AppFramework\Controller;
@@ -56,7 +57,11 @@ class AdminAiUsersController extends Controller
 
     public function deactivate(string $uid): JSONResponse
     {
-        $this->aiUsers->deactivate($uid);
+        try {
+            $this->aiUsers->deactivate($uid);
+        } catch (FailureException $e) {
+            return $this->failed($e, 'Deactivating AI failed');
+        }
 
         return new JSONResponse(['success' => true]);
     }

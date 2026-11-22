@@ -50,6 +50,9 @@ Requires a running Synaplan server.
 			<step>OCA\OcoSynaplan\Migration\MigrateSettings</step>
 		</post-migration>
 	</repair-steps>
+	<background-jobs>
+		<job>OCA\OcoSynaplan\BackgroundJob\AdoptIdentitiesJob</job>
+	</background-jobs>
 	<navigation>
 		<name>Synaplan</name>
 		<route>oco_synaplan.page.research</route>

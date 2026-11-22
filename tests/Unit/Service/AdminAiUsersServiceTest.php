@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\Tests\Unit\Service;
 
+use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Service\AdminAiUsersService;
 use OCA\OcoSynaplan\Service\UserAccountService;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
@@ -59,7 +60,50 @@ final class AdminAiUsersServiceTest extends TestCase
         self::assertSame([], $this->http->calls, 'opening the list costs nobody a token renewal');
     }
 
-    public function testDeactivatingRevokesTheKeyAndForgetsTheConsent(): void
+    public function testDeactivatingPausesAProvisionedPersonInsteadOfDeletingTheirKey(): void
+    {
+        $this->register();
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::CONSENT_PREF, '1');
+        $this->keys()->setUserKey('ada', 'sk_ada');
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::USER_KEY_ID_PREF, '11');
+        $this->http->answer(static fn (): array => ['success' => true, 'account' => 'kept', 'status' => 'suspended', 'message' => '']);
+
+        $this->service()->deactivate('ada');
+
+        self::assertSame(['external_id' => 'ada', 'event' => 'disabled'], $this->http->to('/oauth/register/client-1/lifecycle')[0]['body']);
+        self::assertSame([], $this->http->to('/api/v1/apikeys/11'));
+        self::assertNull($this->config->userValue('ada', UserAccountService::CONSENT_PREF));
+        self::assertSame('sk_ada', $this->keys()->getUserKey('ada'), 'Activate resumes the same account');
+        self::assertTrue($this->accounts()->isPaused('ada'));
+    }
+
+    public function testDeactivatingSaysWhenSynaplanCannotPauseThePerson(): void
+    {
+        $this->register();
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::CONSENT_PREF, '1');
+        $this->keys()->setUserKey('ada', 'sk_ada');
+        $this->http->answer(static fn (): \Throwable => new \RuntimeException('cURL error 7'));
+
+        $this->expectException(FailureException::class);
+        $this->service()->deactivate('ada');
+    }
+
+    public function testDeactivatingAConnectedPersonRevokesTheirGrant(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'link');
+        $this->register();
+        $this->connect('ada');
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::CONSENT_PREF, '1');
+
+        $this->service()->deactivate('ada');
+
+        self::assertSame('refresh-1', $this->http->to('/oauth/revoke')[0]['body']['token']);
+        self::assertSame([], $this->http->to('/oauth/register/client-1/lifecycle'));
+        self::assertFalse($this->oauth()->isConnected('ada'));
+        self::assertNull($this->config->userValue('ada', UserAccountService::CONSENT_PREF));
+    }
+
+    public function testDeactivatingWithoutARegistrationRevokesTheKeyAndForgetsTheConsent(): void
     {
         $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::CONSENT_PREF, '1');
         $this->keys()->setUserKey('ada', 'sk_ada');

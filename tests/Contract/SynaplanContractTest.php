@@ -7,6 +7,7 @@ namespace OCA\OcoSynaplan\Tests\Contract;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Controller\ChatController;
 use OCA\OcoSynaplan\Http\SseProxyResponse;
+use OCA\OcoSynaplan\Listener\UserDeletedListener;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\OAuthClient;
@@ -226,6 +227,7 @@ final class SynaplanContractTest extends TestCase
                 '/oauth/register' => ['client_id' => 'client-1', 'status' => 'active'],
                 '/oauth/par' => ['request_uri' => 'urn:ietf:params:oauth:request_uri:abc', 'expires_in' => 60],
                 '/oauth/token' => ['access_token' => 'access-2', 'refresh_token' => 'refresh-2', 'expires_in' => 900, 'token_type' => 'Bearer'],
+                '/api/v1/admin/users/7/usage' => ['user' => ['id' => 7, 'email' => 'ada@example.org', 'external_id' => 'oc1234567890:ada']],
                 default => self::RESPONSE,
             },
         );
@@ -266,12 +268,15 @@ final class SynaplanContractTest extends TestCase
             fn () => $client->generateMedia('A cat', 'image', 3),
             fn () => $client->downloadFile('/api/v1/files/uploads/7/cat.png'),
             fn () => $accounts->fetchUsage(7),
+            fn () => $accounts->adoptLegacyAccount('ada'),
             fn () => $accounts->renewProvisionedKey(),
             fn () => $accounts->provisionAccount($this->person('bob')),
             fn () => $links->register('registration-token'),
             fn () => $links->registrationStatus(),
             fn () => $links->announce(),
             fn () => $oauth->reportLifecycle('ada', 'disabled'),
+            fn () => $links->reportLifecycle('ada', 'enabled'),
+            fn () => (new UserDeletedListener($accounts, $links))->handle($this->person('ada')),
             fn () => $oauth->authorizeUrl('ada', 'state-1', self::CALLBACK, false),
             fn () => $oauth->connect('ada', 'code-1', 'verifier-1', self::CALLBACK),
             function () use ($oauth): void {
@@ -281,7 +286,6 @@ final class SynaplanContractTest extends TestCase
             fn () => $links->whoAmI('ada'),
             fn () => $oauth->revoke('ada'),
             fn () => $links->disconnectUid('ada'),
-            fn () => $accounts->deleteRemoteAccount('ada'),
             fn () => $links->forgetRegistration(),
         ];
         foreach ($scenarios as $scenario) {

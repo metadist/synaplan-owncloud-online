@@ -54,6 +54,27 @@ export async function davAs(uid: string): Promise<APIRequestContext> {
   return request.newContext({ baseURL: OCO_URL, extraHTTPHeaders: { Authorization: `Basic ${credentials}` } })
 }
 
+const REVIEW_TEXT = `Vendor review: Northwind Office Supplies
+
+Northwind delivered 96 of 100 orders on time this quarter. Two deliveries
+arrived damaged and were replaced within a week. Prices rose by 4 percent in
+March. The account manager answers within one working day.
+
+Recommendation: keep Northwind for another year and ask for a fixed price
+until December.
+`
+
+/** Put the file the journeys work on into the person's root folder. */
+export async function uploadReview(uid: string): Promise<void> {
+  const dav = await davAs(uid)
+  const uploaded = await dav.put(`/remote.php/dav/files/${uid}/${FILE}`, {
+    data: REVIEW_TEXT,
+    headers: { 'Content-Type': 'text/plain' },
+  })
+  expect(uploaded.ok(), `uploading ${FILE} for ${uid}`).toBe(true)
+  await dav.dispose()
+}
+
 /** An API client signed in to Synaplan. */
 export async function synaplanAs(account: { email: string; password: string }): Promise<APIRequestContext> {
   const context = await request.newContext({ baseURL: SYNAPLAN_URL })
@@ -92,23 +113,85 @@ export async function resetPerson(uid: string): Promise<void> {
 }
 
 /**
- * Delete the Synaplan account provisioning created for a person. The pinned
- * Synaplan keeps a deactivated person's identity revoked, and provisioning
- * the same person again lands on that identity, so a provisioning journey
- * starts without the account (see the pull request's findings). Accounts
- * people made themselves are never touched.
+ * The ids of the Synaplan accounts provisioning created for an email address.
+ * Accounts people made themselves are left out.
  */
-export async function deleteSynaplanAccount(email: string): Promise<void> {
+export async function provisionedAccountIds(email: string): Promise<number[]> {
   const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
   const found = await synaplan.get(`/api/v1/admin/users?search=${encodeURIComponent(email)}`)
   expect(found.ok(), `looking up ${email} in Synaplan`).toBe(true)
   const { users = [] } = (await found.json()) as { users?: { id: number; email: string; providerId: string }[] }
-  const provisioned = users.filter((candidate) => candidate.email === email && candidate.providerId === 'external')
-  for (const user of provisioned) {
-    const deleted = await synaplan.delete(`/api/v1/admin/users/${user.id}`)
+  await synaplan.dispose()
+  return users.filter((user) => user.email === email && user.providerId === 'external').map((user) => user.id)
+}
+
+/**
+ * Delete the Synaplan account provisioning created for a person, so a
+ * provisioning journey starts without one, even after a release that
+ * revoked the account on Deactivate.
+ */
+export async function deleteSynaplanAccount(email: string): Promise<void> {
+  const ids = await provisionedAccountIds(email)
+  const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
+  for (const id of ids) {
+    const deleted = await synaplan.delete(`/api/v1/admin/users/${id}`)
     expect(deleted.ok(), `deleting ${email} from Synaplan`).toBe(true)
   }
   await synaplan.dispose()
+}
+
+/**
+ * The calls of the administrator's Users page. Not the OCS user API: on
+ * 11.0.10 it answers "ok" and changes nobody.
+ */
+async function onUsersPage<T>(act: (admin: APIRequestContext) => Promise<T>): Promise<T> {
+  const admin = await ownCloudAs('admin')
+  try {
+    return await act(admin)
+  } finally {
+    await admin.dispose()
+  }
+}
+
+/** Create an ownCloud.online user, with an email address, as an administrator does. */
+export async function createUser(uid: string, email: string): Promise<void> {
+  await onUsersPage(async (admin) => {
+    const created = await admin.post('/index.php/settings/users/users', {
+      data: { username: uid, password: passwordOf(uid) },
+    })
+    expect(created.status(), `creating ${uid}`).toBe(201)
+    const emailSet = await admin.put(`/index.php/settings/admin/${encodeURIComponent(uid)}/mailAddress`, {
+      data: { mailAddress: email },
+    })
+    expect(emailSet.ok(), `setting ${uid}'s email: HTTP ${emailSet.status()}`).toBe(true)
+  })
+}
+
+/** Disable or enable an ownCloud.online user, as an administrator does. */
+export async function setUserEnabled(uid: string, enabled: boolean): Promise<void> {
+  await onUsersPage(async (admin) => {
+    const response = await admin.post(`/index.php/settings/users/${encodeURIComponent(uid)}/enabled`, {
+      data: { username: uid, enabled: String(enabled) },
+    })
+    expect(response.ok(), `${enabled ? 'enabling' : 'disabling'} ${uid}: HTTP ${response.status()}`).toBe(true)
+    expect(((await response.json()) as { status: string }).status).toBe('success')
+  })
+}
+
+/** Delete an ownCloud.online user, as an administrator does; one already gone is fine. */
+export async function deleteUser(uid: string): Promise<void> {
+  await onUsersPage(async (admin) => {
+    const response = await admin.delete(`/index.php/settings/users/users/${encodeURIComponent(uid)}`)
+    if (response.status() === 204) {
+      return
+    }
+    const found = await admin.get('/index.php/settings/users/users', { params: { pattern: uid, limit: 50 } })
+    const users = (await found.json()) as { name: string }[]
+    expect(
+      users.map((user) => user.name),
+      `deleting ${uid}: HTTP ${response.status()}`,
+    ).not.toContain(uid)
+  })
 }
 
 /** Sign in on the ownCloud.online login page. */
@@ -143,6 +226,23 @@ export async function openFileAction(page: Page, action: string, file = FILE): P
 /** The consent card a dialog opens with until the person can use Synaplan. */
 export function consentCard(page: Page): Locator {
   return page.getByTestId('synaplan-consent')
+}
+
+/**
+ * Turn AI on from the summary dialog and summarize the file, as a person
+ * whose Synaplan account the administrator's settings create.
+ */
+export async function activateAndSummarize(page: Page): Promise<Locator> {
+  const dialog = await openFileAction(page, 'Summarize with Synaplan')
+  const summarize = dialog.getByRole('button', { name: 'Summarize', exact: true })
+  await expect(summarize).toHaveCount(0)
+
+  await consentCard(page).getByRole('button', { name: 'Use Synaplan' }).click()
+  await summarize.click()
+
+  await expect(dialog.locator('.oco-result')).not.toBeEmpty()
+  await expect(dialog.locator('.oco-failure')).toHaveCount(0)
+  return dialog
 }
 
 /** Sign in on Synaplan's connect page and allow the link. */
@@ -228,13 +328,16 @@ interface Link {
   status: string
 }
 
-/** The Synaplan person's links from this ownCloud.online for one person. */
-export async function linksOf(synaplan: APIRequestContext, uid: string): Promise<Link[]> {
+/** The Synaplan person's links from this ownCloud.online for one person, ended ones too. */
+export async function allLinksOf(synaplan: APIRequestContext, uid: string): Promise<Link[]> {
   const response = await synaplan.get('/api/v1/me/platform-links')
   expect(response.ok(), 'listing the Synaplan links').toBe(true)
   const { links } = (await response.json()) as { links: Link[] }
   const host = new URL(OCO_URL).host
-  return links.filter(
-    (link) => link.client === 'owncloud' && link.host === host && link.external_id === uid && link.status === 'active',
-  )
+  return links.filter((link) => link.client === 'owncloud' && link.host === host && link.external_id === uid)
+}
+
+/** The Synaplan person's active links from this ownCloud.online for one person. */
+export async function linksOf(synaplan: APIRequestContext, uid: string): Promise<Link[]> {
+  return (await allLinksOf(synaplan, uid)).filter((link) => link.status === 'active')
 }
