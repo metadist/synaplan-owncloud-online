@@ -96,10 +96,18 @@ unlink: ## Remove the symlink from the ownCloud.online apps dir
 ## Local ownCloud.online stack (Docker)
 # OCO_SERVER_PATH is the BW-Tech checkout, OCO_TAG the version it must be at.
 # A version change needs fresh volumes: make dev-server dev-reset dev-up.
+# DEV_SYNAPLAN=test points the app at the Synaplan test stack on the Docker
+# host (make e2e-up, here or in the Nextcloud repo) instead of a Synaplan dev
+# API on :8000. The addresses are written at install time, so switching needs
+# fresh volumes: make dev-reset dev-up DEV_SYNAPLAN=test.
 
 COMPOSE_DEV := docker compose -f docker-compose.dev.yml
 OCO_EXEC := $(COMPOSE_DEV) exec -T -u www-data owncloud
-export OCO_SERVER_PATH OCO_TAG SYNAPLAN_URL_LOCAL
+ifeq ($(DEV_SYNAPLAN),test)
+SYNAPLAN_URL_LOCAL = http://host.docker.internal:$(E2E_SYNAPLAN_PORT)
+SYNAPLAN_PUBLIC_URL_LOCAL = $(E2E_SYNAPLAN_URL)
+endif
+export OCO_SERVER_PATH OCO_TAG SYNAPLAN_URL_LOCAL SYNAPLAN_PUBLIC_URL_LOCAL
 
 # The gitignored copy follows the example: created when missing, and refreshed
 # when the example is newer, with the old copy kept as docker-compose.dev.yml.bak.
@@ -119,7 +127,7 @@ dev-server: ## Clone the BW-Tech checkout into OCO_SERVER_PATH, or check out OCO
 	fi
 	@git -C $(OCO_SERVER_PATH) describe --tags
 
-dev-up: docker-compose.dev.yml ## Start ownCloud.online on :8083 with MariaDB, cron and the test people
+dev-up: docker-compose.dev.yml ## Start ownCloud.online on :8083 with MariaDB, cron and the test people (DEV_SYNAPLAN=test: the Synaplan test stack)
 	@test -f $(OCO_SERVER_PATH)/version.php || { echo "No checkout at $(OCO_SERVER_PATH): run 'make dev-server'."; exit 1; }
 	@if [ ! -f js/files-init.js ]; then \
 		echo "Building the frontend (js/ is missing)…"; \
@@ -133,6 +141,7 @@ dev-up: docker-compose.dev.yml ## Start ownCloud.online on :8083 with MariaDB, c
 		&& echo "$(app_name) is enabled" || { echo "$(app_name) is not enabled"; exit 1; }
 	@echo ""
 	@echo "ownCloud.online: http://localhost:8083  (admin / admin; ada, bob, carol / <name>-dev-pass)"
+	$(if $(filter test,$(DEV_SYNAPLAN)),@echo "Synaplan:        $(E2E_SYNAPLAN_URL)  (the test stack; from the ownCloud.online containers: $(SYNAPLAN_URL_LOCAL))")
 
 dev-down: docker-compose.dev.yml ## Stop local ownCloud.online (keeps the volumes)
 	$(COMPOSE_DEV) down
@@ -150,27 +159,36 @@ dev-shell: docker-compose.dev.yml ## Open a shell in the ownCloud.online contain
 	$(COMPOSE_DEV) exec -u www-data owncloud bash
 
 ## End-to-end journeys (Playwright)
-# The Synaplan test stack of SYNAPLAN_DIR runs the pinned image (APP_IMAGE)
-# on :8001; the journeys run on the dev stack, which reaches it on the
-# Docker host.
+# The journeys run on the dev stack against a Synaplan test stack with the
+# pinned image (APP_IMAGE), which the dev stack reaches on the Docker host.
+#
+# One Synaplan test stack serves this repo and the Nextcloud repo: when one
+# already answers at E2E_SYNAPLAN_URL, e2e-up uses it and leaves it alone,
+# and e2e-down only removes a stack this repo started.
 
+export E2E_SYNAPLAN_URL ?= http://localhost:8001
+E2E_SYNAPLAN_PORT := $(lastword $(subst :, ,$(E2E_SYNAPLAN_URL)))
 COMPOSE_E2E_SYNAPLAN := docker compose -p synaplan-owncloud-e2e-synaplan \
 	-f $(SYNAPLAN_DIR)/docker-compose.test.yml \
 	-f $(SYNAPLAN_DIR)/docker-compose.test.ci.yml \
 	-f tests/e2e/synaplan-test-stack.yml
 
-e2e-up: build ## Start the Synaplan test stack on :8001 and ownCloud.online on :8083
-	@test -f $(SYNAPLAN_DIR)/docker-compose.test.yml || { echo "No Synaplan checkout at $(SYNAPLAN_DIR) (README, Development)."; exit 1; }
-	docker image inspect $(APP_IMAGE) >/dev/null 2>&1 || docker pull -q $(APP_IMAGE)
-	$(COMPOSE_E2E_SYNAPLAN) up -d --wait
-	$(MAKE) dev-up SYNAPLAN_URL_LOCAL=http://host.docker.internal:8001
+e2e-up: build ## Start the Synaplan test stack on :8001 (or use a running one) and ownCloud.online on :8083
+	@if curl -fsS -o /dev/null --max-time 5 $(E2E_SYNAPLAN_URL)/api/health; then \
+		echo "A Synaplan test stack already answers at $(E2E_SYNAPLAN_URL): using it."; \
+	else \
+		test -f $(SYNAPLAN_DIR)/docker-compose.test.yml || { echo "No Synaplan checkout at $(SYNAPLAN_DIR) (README, Development)."; exit 1; }; \
+		docker image inspect $(APP_IMAGE) >/dev/null 2>&1 || docker pull -q $(APP_IMAGE); \
+		$(COMPOSE_E2E_SYNAPLAN) up -d --wait; \
+	fi
+	$(MAKE) dev-up DEV_SYNAPLAN=test
 
 test-e2e: ## Run the e2e journeys against the stacks of e2e-up
 	npx playwright test
 
-e2e-down: ## Remove the Synaplan test stack and reset the dev stack — destroys both stacks' data
-	$(COMPOSE_E2E_SYNAPLAN) down -v
+e2e-down: ## Reset the dev stack and remove the Synaplan test stack — destroys their data (E2E_KEEP_SYNAPLAN=1 keeps the Synaplan test stack)
 	$(MAKE) dev-reset
+	$(if $(filter 1,$(E2E_KEEP_SYNAPLAN)),@echo "Keeping the Synaplan test stack.",$(COMPOSE_E2E_SYNAPLAN) down -v)
 
 ## Release
 

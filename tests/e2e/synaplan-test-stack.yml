@@ -19,6 +19,8 @@ services:
       CLOUD_FILES_ENABLED: 'true'
       # The suite registers this ownCloud.online itself and expects the
       # client to be active. People still consent one by one. The token
-      # is what the setup sends, and it approves that one registration.
+      # is what the setup sends, and it approves that one registration;
+      # open registration takes the ones after it, and the Nextcloud
+      # app's on the same stack.
       PLATFORM_LINKS_REGISTRATION: open
       PLATFORM_LINKS_REGISTRATION_TOKEN: owncloud-e2e-initial-access-token-0001

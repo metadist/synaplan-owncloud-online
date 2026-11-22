@@ -80,6 +80,10 @@ if ! installed; then
 	occ app:enable "$APP"
 	occ config:app:set "$APP" active_env --value local
 	occ config:app:set "$APP" synaplan_url_local --value "${SYNAPLAN_URL_LOCAL:-http://host.docker.internal:8000}"
+	# The address people's browsers open Synaplan at, when it is not the one above.
+	if [ -n "${SYNAPLAN_PUBLIC_URL_LOCAL:-}" ]; then
+		occ config:app:set "$APP" synaplan_public_url_local --value "$SYNAPLAN_PUBLIC_URL_LOCAL"
+	fi
 fi
 
 occ app:enable "$APP"

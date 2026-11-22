@@ -127,6 +127,53 @@ data. `OCO_URL` and `E2E_SYNAPLAN_URL` move the journeys to other ports;
 point `E2E_SYNAPLAN_URL` only at a Synaplan test stack, since the journeys
 create keys and register this server there.
 
+### Next to the Nextcloud app
+
+This repo and [synaplan-nextcloud](https://github.com/metadist/synaplan-nextcloud)
+run on one machine at the same time, against one Synaplan test stack:
+
+| | ownCloud.online | Nextcloud |
+| --- | --- | --- |
+| Dev stack | :8083, Compose project `synaplan-owncloud-dev`, containers `synaplan-owncloud-dev*` | :8081, containers `synaplan-nextcloud-dev*` |
+| e2e stack | the dev stack on :8083 | :8091, Compose project `synaplan-nextcloud-e2e` |
+| Synaplan test stack | shared on :8001 | shared on :8001 |
+
+Each Compose project has its own default network and project-named volumes.
+The Synaplan test stack has fixed container names and host ports, so only one
+runs: whichever repo starts it owns it, and `make e2e-up` in the other repo
+finds it at `E2E_SYNAPLAN_URL` and uses it. The two e2e overlays set the same
+environment apart from the registration token, and registration is `open`,
+so each app registers its own client either way. Each suite touches only
+what its own server made in Synaplan: the links of its client, host and
+person, and the account it provisions for Carol (here `carol.oco@example.org`).
+
+```bash
+make e2e-up                         # starts the Synaplan test stack, or uses the one that answers on :8001
+make test-e2e                       # meanwhile `make e2e-up test-e2e` in ../synaplan-nextcloud
+E2E_KEEP_SYNAPLAN=1 make e2e-down   # resets ownCloud.online and leaves the shared Synaplan running
+```
+
+`make e2e-down` without `E2E_KEEP_SYNAPLAN=1` also removes the Synaplan test
+stack when this repo started it; a stack the other repo started is left
+alone, as Compose only removes its own project. The registration token is
+single-use, so on a kept stack the journeys register this server again
+without it.
+
+`make e2e-up` installs the dev stack with `DEV_SYNAPLAN=test`, which points
+the app at the test stack. After `make test-e2e` the app stays registered
+there with an API key, so Ada (`ada` / `ada-dev-pass`) can connect and try
+it by hand next to Nextcloud. The addresses are written at install time, so
+an existing install switches with fresh volumes:
+
+```bash
+make dev-reset dev-up DEV_SYNAPLAN=test
+```
+
+A dev stack started before it had its own Compose project name runs under
+the checkout's folder name, with the same container names. Stop it once with
+`docker compose -p <folder> -f docker-compose.dev.yml down` (add `-v` to
+delete its data) before `make dev-up`.
+
 ### Local ownCloud.online stack
 
 There is no official image of BW-Tech's ownCloud.online. The dev stack runs a
@@ -140,6 +187,8 @@ container that runs `php occ system:cron` every 60 seconds.
 | `OCO_SERVER_PATH` | `../owncloud.online` | the BW-Tech checkout, mounted at `/var/www/html` |
 | `OCO_TAG` | `v11.0.10` | the tag the checkout must be at; CI also runs the newest `v11.0.*` (`v11.0.29`) |
 | `SYNAPLAN_URL_LOCAL` | `http://host.docker.internal:8000` | the Synaplan API as the container reaches it, written on first install |
+| `SYNAPLAN_PUBLIC_URL_LOCAL` | empty (the address above) | the Synaplan address people's browsers open, written on first install |
+| `DEV_SYNAPLAN` | `dev` | `test` sets both addresses to the Synaplan test stack at `E2E_SYNAPLAN_URL` (see *Next to the Nextcloud app*) |
 
 ```bash
 make dev-server        # git clone --depth 1 --branch $OCO_TAG …/owncloud.online.git $OCO_SERVER_PATH,

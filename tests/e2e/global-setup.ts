@@ -55,6 +55,17 @@ async function registrationStatus(): Promise<string> {
   return instance?.status ?? ''
 }
 
+/** Register this ownCloud.online with Synaplan; the error it reports, '' on success. */
+async function register(token: string): Promise<string> {
+  const admin = await ownCloudAs('admin')
+  const response = await admin.post(`${APP}/api/v1/settings/register-instance`, {
+    data: { registration_token: token },
+  })
+  const { error } = (await response.json()) as { error?: string }
+  await admin.dispose()
+  return error ?? ''
+}
+
 /**
  * Connects the app to the Synaplan test stack the way an administrator
  * does: a Synaplan API key in the admin settings, "Connect your Synaplan
@@ -91,12 +102,15 @@ export default async function globalSetup(): Promise<void> {
   if ((await registrationStatus()) !== 'active') {
     const admin = await ownCloudAs('admin')
     await admin.post(`${APP}/api/v1/settings/forget-instance`)
-    const registered = await admin.post(`${APP}/api/v1/settings/register-instance`, {
-      data: { registration_token: REGISTRATION_TOKEN },
-    })
-    const registration = (await registered.json()) as { error?: string }
-    expect(registration.error ?? '', 'registering ownCloud.online').toBe('')
     await admin.dispose()
+    let error = await register(REGISTRATION_TOKEN)
+    // The token is single-use: on a Synaplan test stack kept from an earlier
+    // run (E2E_KEEP_SYNAPLAN) it is spent, and open registration takes the
+    // request without it.
+    if (/already used/.test(error)) {
+      error = await register('')
+    }
+    expect(error, 'registering ownCloud.online').toBe('')
   }
   expect(await registrationStatus(), 'the instance is active').toBe('active')
 

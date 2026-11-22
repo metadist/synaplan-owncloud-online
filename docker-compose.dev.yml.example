@@ -15,6 +15,11 @@
 #
 # The app is mounted over apps/oco_synaplan of the checkout. Config and data
 # live in volumes, so `make dev-reset` never touches the checkout.
+#
+# The project name keeps the network and volumes apart from other stacks on
+# the machine, such as the Nextcloud app's, whatever the checkout is called.
+
+name: synaplan-owncloud-dev
 
 x-owncloud: &owncloud
   image: synaplan-owncloud-dev:php8.4
@@ -27,6 +32,7 @@ x-owncloud: &owncloud
     DB_PASS: owncloud
     OCO_TAG: ${OCO_TAG:-v11.0.10}
     SYNAPLAN_URL_LOCAL: ${SYNAPLAN_URL_LOCAL:-http://host.docker.internal:8000}
+    SYNAPLAN_PUBLIC_URL_LOCAL: ${SYNAPLAN_PUBLIC_URL_LOCAL:-}
   extra_hosts:
     - host.docker.internal:host-gateway
   restart: unless-stopped
