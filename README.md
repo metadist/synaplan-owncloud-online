@@ -176,7 +176,10 @@ E2E_KEEP_SYNAPLAN=1 make e2e-down   # resets ownCloud.online and leaves the shar
 stack when this repo started it; a stack the other repo started is left
 alone, as Compose only removes its own project. The registration token is
 single-use, so on a kept stack the journeys register this server again
-without it.
+without it. Synaplan allows a registered client 30 updates an hour, and each
+saved admin setting is one, so the global setup clears those counters in the
+test stack's Redis (`synaplan-redis-test`; `SYNAPLAN_REDIS_CONTAINER` names
+another) before each run.
 
 `make e2e-up` installs the dev stack with `DEV_SYNAPLAN=test`, which points
 the app at the test stack. After `make test-e2e` the app stays registered

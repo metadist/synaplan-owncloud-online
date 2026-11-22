@@ -1,4 +1,5 @@
 import { expect, request } from '@playwright/test'
+import { spawnSync } from 'node:child_process'
 import {
   APP,
   OCO_URL,
@@ -18,6 +19,9 @@ const PEOPLE = ['ada', 'carol']
 
 /** The initial access token the Synaplan test stack accepts (synaplan-test-stack.yml). */
 const REGISTRATION_TOKEN = 'owncloud-e2e-initial-access-token-0001'
+
+/** The Redis of the Synaplan test stack (its docker-compose.test.yml). */
+const SYNAPLAN_REDIS_CONTAINER = process.env.SYNAPLAN_REDIS_CONTAINER ?? 'synaplan-redis-test'
 
 async function waitUntilReady(url: string): Promise<void> {
   const context = await request.newContext()
@@ -56,6 +60,29 @@ async function register(token: string): Promise<string> {
 }
 
 /**
+ * Synaplan allows a registered client 30 updates an hour and has no setting
+ * to lift that. Every saved admin setting is one update, so a test stack
+ * that stays up between runs locks this ownCloud.online out within a few
+ * runs. Clear those counters in the test stack's Redis before each run.
+ */
+function resetClientUpdateLimit(): void {
+  const redis = (...args: string[]): string[] => {
+    const run = spawnSync('docker', ['exec', SYNAPLAN_REDIS_CONTAINER, 'redis-cli', ...args], { encoding: 'utf8' })
+    if (run.status !== 0) {
+      const reason = (run.stderr || run.error?.message || '').trim()
+      throw new Error(
+        `Could not reach the Synaplan test Redis in ${SYNAPLAN_REDIS_CONTAINER}; set SYNAPLAN_REDIS_CONTAINER. ${reason}`,
+      )
+    }
+    return run.stdout.split('\n').filter((line) => line.trim() !== '')
+  }
+  const keys = redis('--scan', '--pattern', '*oauth:client-update:*')
+  if (keys.length > 0) {
+    redis('del', ...keys)
+  }
+}
+
+/**
  * Connects the app to the Synaplan test stack the way an administrator
  * does: a Synaplan API key in the admin settings, "Connect your Synaplan
  * account" as the mode, this ownCloud.online registered. Each test person
@@ -65,6 +92,7 @@ async function register(token: string): Promise<string> {
 export default async function globalSetup(): Promise<void> {
   await waitUntilReady(`${SYNAPLAN_URL}/api/health`)
   await waitUntilReady(`${OCO_URL}/status.php`)
+  resetClientUpdateLimit()
 
   const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
   const created = await synaplan.post('/api/v1/apikeys', {
