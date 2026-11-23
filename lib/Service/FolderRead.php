@@ -329,6 +329,8 @@ class FolderRead
      * How long the next call to Synaplan may take: its own limit in the job,
      * no longer than the request has left in it, and null when that is a
      * second or less.
+     *
+     * @phpstan-impure
      */
     private function secondsFor(?int $deadline, int $limit): ?int
     {
@@ -473,9 +475,13 @@ class FolderRead
      */
     private function filesIn(string $uid, Folder $userFolder, Folder $folder, bool $recursive, int $since, ?int $deadline): ?array
     {
+        // A slow claim or folder lookup can have spent the time already.
+        if ($this->secondsFor($deadline, 1) === null) {
+            return null;
+        }
         $found = [];
         foreach ($folder->getDirectoryListing() as $node) {
-            if ($deadline !== null && $this->time->getTime() >= $deadline) {
+            if ($this->secondsFor($deadline, 1) === null) {
                 return null;
             }
             if ($node instanceof Folder) {

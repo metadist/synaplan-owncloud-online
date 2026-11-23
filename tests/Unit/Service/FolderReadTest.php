@@ -41,6 +41,8 @@ final class FolderReadTest extends TestCase
     private int $privateTakes = 0;
     /** Whether Ada's files can be opened. */
     private bool $homeAway = false;
+    /** How often Invoices was listed. */
+    private int $invoicesListed = 0;
 
     protected function setUp(): void
     {
@@ -79,7 +81,11 @@ final class FolderReadTest extends TestCase
         $invoices->method('getId')->willReturn(30);
         $invoices->method('getPath')->willReturn('/ada/files/Invoices');
         $invoices->method('getName')->willReturn('Invoices');
-        $invoices->method('getDirectoryListing')->willReturnCallback(fn (): array => $this->listing);
+        $invoices->method('getDirectoryListing')->willReturnCallback(function (): array {
+            $this->invoicesListed++;
+
+            return $this->listing;
+        });
         $this->listing = [$file];
 
         $home = $this->createStub(Folder::class);
@@ -482,6 +488,25 @@ final class FolderReadTest extends TestCase
         $this->reads->finish('15', 'ada');
         self::assertSame([], $this->leftOver());
         self::assertSame(1, $opened);
+    }
+
+    public function testAFolderIsNotListedOnceAClaimTookTheRequestsTime(): void
+    {
+        $this->scope->method('mayRead')->willReturn(true);
+        $this->links->method('claimPickup')->willReturnCallback(function (): array {
+            $this->now += FolderRead::BUDGET_SECONDS;
+
+            return $this->claim();
+        });
+        $this->links->expects($this->once())->method('submitPickupListing')->willReturn(['upload' => [], 'reuse' => [], 'skip' => []]);
+        $this->jobs->expects($this->once())->method('add')->with(PickupJob::class, ['id' => '15', 'uid' => 'ada']);
+
+        $this->reads->handle('15', 'ada');
+        self::assertSame(0, $this->invoicesListed);
+        self::assertCount(1, $this->leftOver());
+
+        $this->reads->finish('15', 'ada');
+        self::assertSame(1, $this->invoicesListed);
     }
 
     public function testNoListingCallOutlastsTheRequestAndTheJobListsAgain(): void
