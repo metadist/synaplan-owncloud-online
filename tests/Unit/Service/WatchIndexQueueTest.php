@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\Service;
 
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
+use Doctrine\DBAL\Result;
 use OCA\OcoSynaplan\Service\WatchIndex;
 use OCP\DB\QueryBuilder\IExpressionBuilder;
 use OCP\DB\QueryBuilder\IParameter;
@@ -69,39 +70,21 @@ final class WatchIndexQueueTest extends TestCase
         );
     }
 
-    public function testAQueuedDeletionBecomesARestoreAsANewChange(): void
+    public function testASyncThatReadSynaplansListBeforeTheResumeLeavesTheNewStart(): void
     {
-        self::assertTrue($this->index()->replaceEvent(5, 30, 'deleted', 'restored', 200));
+        $this->rowExists = true;
+        $this->index()->replace('ada', [['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'paused']], 100);
 
-        $statement = $this->last();
-        self::assertSame('update synaplan_watch_queue', $statement[0]);
-        self::assertContains('set event="restored"', $statement);
-        self::assertContains('set changed=200', $statement);
-        self::assertContains('set generation=' . json_encode($this->generations[0]), $statement);
-        self::assertContains('where event="deleted"', $statement);
-    }
-
-    public function testAWatchIsNotedAsHavingLostItsTargetAndAsRunningAgain(): void
-    {
-        $index = $this->index();
-        $index->markTarget(5, true);
-        self::assertSame(['update synaplan_watches', 'set state="attention"', 'set reason="target_gone"', 'where watch_id=5'], $this->last());
-
-        $index->markTarget(5, false);
-        self::assertSame(['update synaplan_watches', 'set state="active"', 'set reason=""', 'where watch_id=5'], $this->last());
-    }
-
-    public function testARetryOfAReplacedRowLeavesTheNewerChange(): void
-    {
-        $this->index()->retryLater(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => 100, 'generation' => 'g1', 'attempts' => 0], 160, 1);
-
-        self::assertContains('where generation="g1"', $this->last());
+        $updates = array_values(array_filter($this->statements, static fn (array $statement): bool => ($statement[0] ?? '') === 'update synaplan_watches'));
+        self::assertCount(1, $updates);
+        self::assertSame([], array_values(array_filter($updates[0], static fn (string $line): bool => str_starts_with($line, 'set since'))));
     }
 
     private function index(): WatchIndex
     {
         $db = $this->createStub(IDBConnection::class);
         $db->method('getQueryBuilder')->willReturnCallback(fn (): IQueryBuilder => $this->builder());
+        $db->method('tableExists')->willReturn(true);
 
         return new WatchIndex($db);
     }
@@ -125,6 +108,12 @@ final class WatchIndexQueueTest extends TestCase
 
             return $parameter;
         });
+        $qb->method('select')->willReturnCallback(static function () use ($qb, $record): IQueryBuilder {
+            $record('select');
+
+            return $qb;
+        });
+        $qb->method('from')->willReturn($qb);
         foreach (['insert', 'update', 'delete'] as $kind) {
             $qb->method($kind)->willReturnCallback(static function (string $table) use ($qb, $record, $kind): IQueryBuilder {
                 $record($kind . ' ' . $table);
@@ -157,8 +146,17 @@ final class WatchIndexQueueTest extends TestCase
                 return $qb;
             });
         }
-        $qb->method('execute')->willReturnCallback(function () use ($at): int {
-            if ($this->rowExists && str_starts_with($this->statements[$at][0] ?? '', 'insert ')) {
+        $qb->method('execute')->willReturnCallback(function () use ($at): int|Result {
+            $kind = $this->statements[$at][0] ?? '';
+            if ($kind === 'select') {
+                // The known watch, as the sync finds it.
+                $rows = $this->rowExists ? [['watch_id' => 5, 'uid' => 'ada', 'target_kind' => 'folder', 'target_id' => 30, 'state' => 'active', 'since' => 200]] : [];
+                $result = $this->createStub(Result::class);
+                $result->method('fetchAssociative')->willReturnOnConsecutiveCalls(...[...$rows, false]);
+
+                return $result;
+            }
+            if ($this->rowExists && str_starts_with($kind, 'insert ')) {
                 throw $this->createStub(UniqueConstraintViolationException::class);
             }
 

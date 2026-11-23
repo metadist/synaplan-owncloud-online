@@ -276,8 +276,12 @@ final class WatchControllerTest extends TestCase
     public function testResumingWithoutTheWaitingFilesCountsOnlyFilesFromNowOn(): void
     {
         $watch = ['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'active'];
-        $this->client->method('updateWatch')->willReturn($watch);
         $order = [];
+        $this->client->method('updateWatch')->willReturnCallback(static function () use (&$order, $watch): array {
+            $order[] = 'resumed in Synaplan';
+
+            return $watch;
+        });
         $this->index->expects($this->once())->method('update')->willReturnCallback(static function () use (&$order): void {
             $order[] = 'active here';
         });
@@ -286,7 +290,8 @@ final class WatchControllerTest extends TestCase
         });
 
         $this->assertSame(200, $this->controller->update(5, 'active', false)->getStatus());
-        $this->assertSame(['queued files let go', 'active here'], $order);
+        // The files queued before go while the watch is still paused, here and in Synaplan.
+        $this->assertSame(['queued files let go', 'resumed in Synaplan', 'active here'], $order);
     }
 
     /**
