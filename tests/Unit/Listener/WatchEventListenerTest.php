@@ -101,6 +101,7 @@ final class WatchEventListenerTest extends TestCase
         $gone->method('getPath')->willReturn('/ada/files/Incoming');
         $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH, ['id' => 8, 'state' => 'paused'] + self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(5, 30, 'deleted', self::NOW);
+        $this->index->expects($this->once())->method('markTarget')->with(5, true);
 
         $listener = $this->listener();
         $listener->deleting($folder);
@@ -138,6 +139,7 @@ final class WatchEventListenerTest extends TestCase
         $folder->method('getId')->willReturn(30);
         $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH, ['id' => 8, 'state' => 'attention', 'reason' => 'target_gone'] + self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(8, 30, 'restored', self::NOW);
+        $this->index->expects($this->once())->method('markTarget')->with(8, false);
 
         $this->listener()->renamed($folder);
     }
@@ -152,19 +154,64 @@ final class WatchEventListenerTest extends TestCase
             ['id' => 9, 'state' => 'attention'] + self::FOLDER_WATCH,
         ]);
         $this->index->expects($this->never())->method('enqueue');
+        $this->index->expects($this->never())->method('markTarget');
 
         $this->listener()->renamed($folder);
     }
 
-    public function testAFolderRestoredBeforeItsDeletionWentOutTakesTheDeletionBack(): void
+    public function testAFolderRestoredWhileItsDeletionIsQueuedIsRestoredInItsPlace(): void
     {
         $folder = $this->createStub(Folder::class);
         $folder->method('getId')->willReturn(30);
         $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH]);
         $this->index->expects($this->never())->method('enqueue');
-        $this->index->expects($this->once())->method('cancelEvent')->with(5, 30, 'deleted');
+        $this->index->expects($this->once())->method('replaceEvent')->with(5, 30, 'deleted', 'restored', self::NOW)->willReturn(true);
+        $this->index->expects($this->once())->method('markTarget')->with(5, false);
 
         $this->listener()->renamed($folder);
+    }
+
+    public function testARunningWatchWithNoDeletionHearsNothingOfARestore(): void
+    {
+        $folder = $this->createStub(Folder::class);
+        $folder->method('getId')->willReturn(30);
+        $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH]);
+        $this->index->method('replaceEvent')->willReturn(false);
+        $this->index->expects($this->never())->method('enqueue');
+        $this->index->expects($this->never())->method('markTarget');
+
+        $this->listener()->renamed($folder);
+    }
+
+    public function testAFolderRestoredAfterItsDeletionWentOutButBeforeSynaplanListedTheWatchAgainIsRestored(): void
+    {
+        $folder = $this->createStub(Folder::class);
+        $folder->method('getId')->willReturn(30);
+        $folder->method('getPath')->willReturn('/ada/files/Incoming');
+        $gone = $this->createStub(Folder::class);
+        $gone->method('getId')->willThrowException(new NotFoundException());
+        $gone->method('getPath')->willReturn('/ada/files/Incoming');
+        $watch = self::FOLDER_WATCH;
+        $queued = [];
+        $this->index->method('on')->willReturnCallback(static function () use (&$watch): array {
+            return [$watch];
+        });
+        $this->index->method('enqueue')->willReturnCallback(static function (int $id, int $file, string $event) use (&$queued): void {
+            $queued[] = $event;
+        });
+        $this->index->method('markTarget')->willReturnCallback(static function (int $id, bool $gone) use (&$watch): void {
+            $watch = ['state' => $gone ? 'attention' : 'active', 'reason' => $gone ? 'target_gone' : ''] + $watch;
+        });
+        // The feed sent the deletion: nothing is queued any more.
+        $this->index->method('replaceEvent')->willReturn(false);
+
+        $listener = $this->listener();
+        $listener->deleting($folder);
+        $listener->deleted($gone);
+        $listener->renamed($folder);
+
+        self::assertSame(['deleted', 'restored'], $queued);
+        self::assertSame('active', $watch['state']);
     }
 
     public function testNothingIsQueuedWhileMutedOrUnregistered(): void
