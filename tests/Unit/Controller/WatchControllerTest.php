@@ -124,6 +124,28 @@ final class WatchControllerTest extends TestCase
         $this->controller->start('folder', '42', 'keep_searchable', null, 'Projects', true);
     }
 
+    public function testAKeepSearchableWatchWithoutAKnowledgeFolderGetsOneNamedAfterOwnCloudOnline(): void
+    {
+        $this->home->method('getById')->willReturn([$this->readableFolder()]);
+        $this->home->method('getRelativePath')->willReturn('/Projects');
+        $this->client->expects($this->once())->method('startWatch')
+            ->with($this->callback(fn (array $body): bool => $body['group_key'] === 'ownCloud.online · Projects'))
+            ->willReturn(['id' => 3]);
+
+        $this->controller->start('folder', '42', 'keep_searchable');
+    }
+
+    public function testTheKnowledgeFolderThePersonChoseIsKept(): void
+    {
+        $this->home->method('getById')->willReturn([$this->readableFolder()]);
+        $this->home->method('getRelativePath')->willReturn('/Projects');
+        $this->client->expects($this->once())->method('startWatch')
+            ->with($this->callback(fn (array $body): bool => $body['group_key'] === 'Contracts'))
+            ->willReturn(['id' => 3]);
+
+        $this->controller->start('folder', '42', 'keep_searchable', null, '  Contracts ');
+    }
+
     public function testOptionsCountTheFilesDirectlyInTheFolder(): void
     {
         $folder = $this->readableFolder();

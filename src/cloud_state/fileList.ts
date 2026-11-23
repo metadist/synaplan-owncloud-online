@@ -248,7 +248,15 @@ function watchedFolderHeader(fileList: OcFileList): HTMLElement | null {
   header.className = HEADER_CLASS
   header.setAttribute('data-testid', HEADER_CLASS)
   header.style.display = 'none'
-  table.parentElement.insertBefore(header, table)
+  // Files keeps its controls bar fixed over the list and moves the list below
+  // it (#filestable.has-controls), so the line goes right after the bar, above
+  // "No files in here", and moves down the same way.
+  const controls = Array.from(table.parentElement.children).find((child) => child.id === 'controls')
+  if (controls) {
+    controls.after(header)
+  } else {
+    table.parentElement.insertBefore(header, table)
+  }
   injectHeaderStyles()
   return header
 }
@@ -260,6 +268,7 @@ function injectHeaderStyles(): void {
   const style = document.createElement('style')
   style.id = 'synaplan-watched-folder-styles'
   style.textContent = `
+#controls + .${HEADER_CLASS} { position: relative; top: 44px; }
 .${HEADER_CLASS} { align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--color-border, #ddd); background: var(--color-background-dark, #f5f5f5); }
 .synaplan-watched-folder-icon { position: relative; display: inline-flex; align-items: center; }
 .synaplan-watched-folder-control { margin: 0; padding: 2px 8px; background: transparent; border: none; font-weight: 600; color: var(--color-primary, #1a67a3); cursor: pointer; }

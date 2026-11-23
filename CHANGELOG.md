@@ -23,7 +23,7 @@ All notable changes to this project are documented here. The format is based on
   are enabled again.
 - **Deactivate** under AI Users pauses a person whose account this server
   created; **Use Synaplan** resumes the same account and key, and connecting
-  their own Synaplan account replaces it.
+  their own   Synaplan account replaces it.
 - Accounts created before this server registered are moved onto the
   registration by an hourly background job, once per registration.
 - The consent card before the first action whenever a person's own Synaplan
@@ -84,6 +84,17 @@ All notable changes to this project are documented here. The format is based on
   and while Synaplan offers file states; **Keep it up to date** and the
   change reports also need this server registered and Synaplan to take them.
   The app's upgrade adds the table changes wait in.
+- **Watch with Synaplan…** on a folder: new files that settle for a
+  minute are kept searchable in a knowledge folder or handed to a task. The
+  dialog says what will happen and asks about the files already there. The
+  folder's bird opens its eyes, a line over the open folder and the Synaplan
+  tab pause, resume or stop the watch, and the Synaplan page lists every
+  watched folder. Resuming a task asks about the files that arrived while
+  paused. An hourly check catches files a missed event left out, and the
+  app's own copies are never sent back. Watching needs edit rights on the
+  folder. Administrators can turn watching, or watching shared folders, off
+  (on by default), and the admin screen warns when background jobs run with
+  Ajax or Webcron.
 
 ### Changed
 

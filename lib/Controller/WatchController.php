@@ -103,8 +103,11 @@ class WatchController extends Controller
             if ($preset === 'task') {
                 $body['task_id'] = $taskId;
             }
-            if ($preset === 'keep_searchable' && $groupKey !== null && trim($groupKey) !== '') {
-                $body['group_key'] = trim($groupKey);
+            if ($preset === 'keep_searchable') {
+                // Synaplan names a folder it has to choose itself after Nextcloud.
+                $body['group_key'] = $groupKey !== null && trim($groupKey) !== ''
+                    ? trim($groupKey)
+                    : mb_substr('ownCloud.online · ' . basename($body['target_path']), 0, 64, 'UTF-8');
             }
 
             $watch = $this->synaplanClient->startWatch($body);

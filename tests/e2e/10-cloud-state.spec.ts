@@ -273,7 +273,12 @@ test.describe('the state of a file in Synaplan', () => {
       await page.goto('/index.php/apps/files/?dir=/')
       await page.locator(`#fileList tr[data-file="${folder}"] td.date`).click()
       await expect(page.locator('#app-sidebar').getByRole('heading', { name: folder, exact: true })).toBeVisible()
-      await expect(page.locator('#app-sidebar .tabHeader', { hasText: 'Synaplan' }), 'no tab for a folder').toBeHidden()
+      await page.locator('#app-sidebar .tabHeader', { hasText: 'Synaplan' }).click()
+      await expect(
+        page.getByTestId('synaplan-sidebar-state'),
+        'a folder’s tab says whether Synaplan watches it',
+      ).toHaveText('Synaplan is not watching this folder.')
+      await expect(page.getByTestId('synaplan-sidebar-make-searchable')).toHaveCount(0)
     } finally {
       await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
       await dav.delete(`${DAV}/${folder}`)

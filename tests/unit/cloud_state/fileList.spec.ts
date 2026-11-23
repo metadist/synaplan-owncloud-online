@@ -458,6 +458,23 @@ describe('the line above a watched folder', () => {
     expect(header()?.querySelector('[data-testid="synaplan-watched-folder-stop"]')).not.toBeNull()
   })
 
+  it('sits right under the controls bar of Files, above "No files in here"', async () => {
+    watched = { '3': { id: 11, state: 'active', sentence: 'Synaplan makes new files searchable by AI.' } }
+    const list = fileList()
+    const wrapper = list.$table[0].parentElement as HTMLElement
+    const controls = document.createElement('div')
+    controls.id = 'controls'
+    const empty = document.createElement('div')
+    empty.id = 'emptycontent'
+    wrapper.prepend(controls, empty)
+    list.dirInfo = { id: 3, etag: '"etag-3"', name: 'Incoming' }
+    ;(await plugin()).attach(list)
+
+    await vi.waitFor(() => expect(header()?.style.display).toBe('flex'))
+    expect(controls.nextElementSibling).toBe(header())
+    expect(header()?.nextElementSibling).toBe(empty)
+  })
+
   it('goes for a folder nobody watches, and comes back for a watched one', async () => {
     watched = { '4': { id: 12, state: 'paused', sentence: 'Watching paused.' } }
     const list = fileList()
