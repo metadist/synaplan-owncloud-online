@@ -1,0 +1,42 @@
+<?php
+
+namespace OCP\DB\QueryBuilder;
+
+/*
+ * ownCloud.online documents a string here, but quotes any string as a column
+ * name; a value goes in as a parameter, literal or function
+ * (OC\DB\QueryBuilder\QuoteHelper::quoteColumnName).
+ */
+
+interface IParameter
+{
+}
+
+interface ILiteral
+{
+}
+
+interface IQueryFunction
+{
+}
+
+interface IQueryBuilder
+{
+    /**
+     * @param string $key
+     * @param string|IParameter|ILiteral|IQueryFunction $value
+     * @return IQueryBuilder
+     */
+    public function set($key, $value);
+}
+
+interface IExpressionBuilder
+{
+    /**
+     * @param string $x
+     * @param string|array<mixed>|IParameter|ILiteral|IQueryFunction $y
+     * @param mixed|null $type
+     * @return string
+     */
+    public function in($x, $y, $type = null);
+}

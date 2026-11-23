@@ -6,6 +6,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Listener;
 
 use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
 use OCA\OcoSynaplan\Listener\SourceEventListener;
+use OCA\OcoSynaplan\Tests\Unit\Support\ArraySourceEventQueue;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCP\BackgroundJob\IJobList;
 use OCP\Files\File;
@@ -27,25 +28,29 @@ final class SourceEventListenerTest extends TestCase
     /** @var array<string, Folder> */
     private array $userFolders = [];
 
+    private ArraySourceEventQueue $events;
+
     protected function setUp(): void
     {
         $this->setUpServices(['mode' => 'link', 'link_instance_id' => 'client-1']);
         $this->signIn($this->person('ada'));
         $this->queued = [];
         $this->userFolders = [];
+        $this->events = new ArraySourceEventQueue();
     }
 
     public function testAChangedFileIsReportedForThePersonInWhoseFilesItChanged(): void
     {
         $this->listener()->written($this->file(7, '/ada/files/Projects/plan.docx', 'ada', '"e2"'));
 
-        self::assertSame([[SourceEventsJob::class, [
+        self::assertSame([[
             'uid' => 'ada',
             'id' => '7',
             'event' => 'changed',
             'version' => '"e2"',
             'path' => 'Projects/plan.docx',
-        ]]], $this->queued);
+        ]], $this->events->events());
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
     public function testASharedFileChangedByARecipientIsReportedForItsOwnerToo(): void
@@ -56,18 +61,20 @@ final class SourceEventListenerTest extends TestCase
 
         self::assertSame(
             [['bob', 'From Ada/plan.docx'], ['ada', 'Projects/plan.docx']],
-            array_map(static fn (array $job): array => [$job[1]['uid'], $job[1]['path']], $this->queued),
+            array_map(static fn (array $event): array => [$event['uid'], $event['path']], $this->events->events()),
         );
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'bob']], [SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
     public function testANewFolderIsNoChangeOfAFile(): void
     {
         $this->listener()->written($this->folder(3, '/ada/files/New', 'ada', []));
 
+        self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
     }
 
-    public function testAMovedFolderReportsItselfAndEverythingInIt(): void
+    public function testAMovedFolderReportsItselfAndEverythingInItAtOnceAndWakesThePersonOnce(): void
     {
         $folder = $this->folder(3, '/ada/files/Archive', 'ada', [
             $this->file(4, '/ada/files/Archive/a.txt', 'ada'),
@@ -78,8 +85,22 @@ final class SourceEventListenerTest extends TestCase
 
         self::assertSame(
             [['3', 'moved', 'Archive'], ['4', 'moved', 'Archive/a.txt'], ['5', 'moved', 'Archive/Old'], ['6', 'moved', 'Archive/Old/b.txt']],
-            array_map(static fn (array $job): array => [$job[1]['id'], $job[1]['event'], $job[1]['path']], $this->queued),
+            array_map(static fn (array $event): array => [$event['id'], $event['event'], $event['path']], $this->events->events()),
         );
+        self::assertCount(1, array_unique(array_map(static fn (array $row): int => $row['ord'], $this->events->rows)), 'one change, one order');
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
+    }
+
+    public function testALaterChangeOfAPersonIsQueuedBehindAnEarlierOne(): void
+    {
+        $listener = $this->listener();
+        $listener->written($this->file(7, '/ada/files/a.txt', 'ada', '"e1"'));
+        usleep(2);
+        $listener->written($this->file(7, '/ada/files/a.txt', 'ada', '"e2"'));
+
+        self::assertSame(['"e1"', '"e2"'], array_map(static fn (array $event): string => $event['version'], $this->events->events()));
+        $rows = array_values($this->events->rows);
+        self::assertLessThan($rows[1]['ord'], $rows[0]['ord']);
     }
 
     public function testADeleteIsReportedOnceItWentThroughWithWhatTheFolderHeld(): void
@@ -88,7 +109,7 @@ final class SourceEventListenerTest extends TestCase
         $folder = $this->folder(3, '/ada/files/Archive', 'ada', [$this->file(4, '/ada/files/Archive/a.txt', 'ada')]);
 
         $listener->deleting($folder);
-        self::assertSame([], $this->queued, 'a delete can still fail');
+        self::assertSame([], $this->events->rows, 'a delete can still fail');
         $gone = $this->createStub(Folder::class);
         $gone->method('getPath')->willReturn('/ada/files/Archive');
         $gone->method('getDirectoryListing')->willThrowException(new NotFoundException());
@@ -96,14 +117,16 @@ final class SourceEventListenerTest extends TestCase
 
         self::assertSame(
             [['3', 'deleted'], ['4', 'deleted']],
-            array_map(static fn (array $job): array => [$job[1]['id'], $job[1]['event']], $this->queued),
+            array_map(static fn (array $event): array => [$event['id'], $event['event']], $this->events->events()),
         );
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
     public function testADeleteThatWasNotSeenStartingReportsNothing(): void
     {
         $this->listener()->deleted($this->file(4, '/ada/files/a.txt', 'ada'));
 
+        self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
     }
 
@@ -116,7 +139,7 @@ final class SourceEventListenerTest extends TestCase
 
         self::assertSame(
             [['ada', '3', 'restored', 'Archive'], ['ada', '4', 'restored', 'Archive/a.txt']],
-            array_map(static fn (array $job): array => [$job[1]['uid'], $job[1]['id'], $job[1]['event'], $job[1]['path']], $this->queued),
+            array_map(static fn (array $event): array => [$event['uid'], $event['id'], $event['event'], $event['path']], $this->events->events()),
         );
     }
 
@@ -128,6 +151,7 @@ final class SourceEventListenerTest extends TestCase
         $this->signIn(null);
         $this->listener()->restored(['filePath' => '/a.txt']);
 
+        self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
     }
 
@@ -137,8 +161,8 @@ final class SourceEventListenerTest extends TestCase
 
         $this->listener()->written($this->file(7, '/ada/files/' . $name, 'ada', str_repeat('e', 300)));
 
-        self::assertSame('', $this->queued[0][1]['path']);
-        self::assertSame(255, strlen($this->queued[0][1]['version']));
+        self::assertSame('', $this->events->events()[0]['path']);
+        self::assertSame(255, strlen($this->events->events()[0]['version']));
     }
 
     public function testOnlyThePersonsOwnFilesAreReported(): void
@@ -147,6 +171,7 @@ final class SourceEventListenerTest extends TestCase
             $this->listener()->written($this->file(7, $path, 'ada'));
         }
 
+        self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
     }
 
@@ -161,7 +186,7 @@ final class SourceEventListenerTest extends TestCase
 
         $this->listener()->written($file);
 
-        self::assertSame(['ada'], array_map(static fn (array $job): string => $job[1]['uid'], $this->queued));
+        self::assertSame(['ada'], array_map(static fn (array $event): string => $event['uid'], $this->events->events()));
     }
 
     /**
@@ -195,6 +220,7 @@ final class SourceEventListenerTest extends TestCase
         $listener->deleted($file);
         $listener->restored(['filePath' => '/a.txt']);
 
+        self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
     }
 
@@ -207,7 +233,7 @@ final class SourceEventListenerTest extends TestCase
         $root = $this->createStub(IRootFolder::class);
         $root->method('getUserFolder')->willReturnCallback(fn (string $uid): Folder => $this->userFolders[$uid] ?? $this->userFolder([]));
 
-        return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session());
+        return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session(), $this->events);
     }
 
     private function owner(string $uid): IUser

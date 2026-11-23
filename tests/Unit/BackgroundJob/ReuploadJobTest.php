@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\BackgroundJob;
 
 use OCA\OcoSynaplan\BackgroundJob\ReuploadJob;
-use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
-use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCP\BackgroundJob\IJobList;
 use OCP\Files\File;
@@ -15,14 +13,9 @@ use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use PHPUnit\Framework\TestCase;
 
-final class SourceEventJobsTest extends TestCase
+final class ReuploadJobTest extends TestCase
 {
     use BuildsServices;
-
-    private const EVENT = ['uid' => 'ada', 'id' => '7', 'event' => 'changed', 'version' => '"e2"', 'path' => 'Projects/plan.docx'];
-
-    /** @var list<array{0: string, 1: mixed}> */
-    private array $queued = [];
 
     /** @var array<string, mixed> what Synaplan answers for the file's state */
     private array $state = [
@@ -38,53 +31,11 @@ final class SourceEventJobsTest extends TestCase
     protected function setUp(): void
     {
         $this->setUpServices(['mode' => 'link']);
-        $this->queued = [];
         $this->node = $this->file(7, 'plan.docx', 12, '"e2"');
         $this->http->answer(fn (string $method, string $path): array => match ($path) {
             '/api/v1/cloud/status' => ['items' => [$this->state]],
             default => ['success' => true, 'file' => ['id' => 42]],
         });
-    }
-
-    public function testTheChangeIsToldForThePersonAndEachCopySynaplanAsksForIsQueued(): void
-    {
-        $links = $this->createMock(PlatformLinkService::class);
-        $links->expects($this->once())->method('reportSourceEvents')
-            ->with([['id' => '7', 'event' => 'changed', 'version' => '"e2"', 'path' => 'Projects/plan.docx']], 'ada')
-            ->willReturn(['applied' => 1, 'ignored' => 0, 'reupload' => [['external_id' => 'ada', 'id' => '7'], ['external_id' => 'bob', 'id' => '7']]]);
-
-        $this->runEventsJob($links, self::EVENT);
-
-        self::assertSame([
-            [ReuploadJob::class, ['uid' => 'ada', 'id' => '7']],
-            [ReuploadJob::class, ['uid' => 'bob', 'id' => '7']],
-        ], $this->queued);
-    }
-
-    public function testASynaplanThatWasBusyIsAskedThreeMoreTimes(): void
-    {
-        $links = $this->createStub(PlatformLinkService::class);
-        $links->method('reportSourceEvents')->willReturn(['applied' => 0, 'ignored' => 0, 'reupload' => [], 'retry' => true]);
-
-        $this->runEventsJob($links, self::EVENT);
-        $this->runEventsJob($links, self::EVENT + ['attempts' => 2]);
-        $this->runEventsJob($links, self::EVENT + ['attempts' => 3]);
-
-        self::assertSame([
-            [SourceEventsJob::class, self::EVENT + ['attempts' => 1]],
-            [SourceEventsJob::class, self::EVENT + ['attempts' => 3]],
-        ], $this->queued);
-    }
-
-    public function testABrokenEventIsDropped(): void
-    {
-        $links = $this->createMock(PlatformLinkService::class);
-        $links->expects($this->never())->method('reportSourceEvents');
-
-        foreach ([null, ['uid' => 'ada', 'id' => '7'], ['uid' => '', 'id' => '7', 'event' => 'changed'], ['uid' => 'ada', 'id' => 7, 'event' => 'changed']] as $argument) {
-            $this->runEventsJob($links, $argument);
-        }
-        self::assertSame([], $this->queued);
     }
 
     public function testAKeptFileIsUploadedAgainWithTheAccessTokenOfAPersonConnectedThroughOAuth(): void
@@ -162,20 +113,6 @@ final class SourceEventJobsTest extends TestCase
         $this->runReuploadJob(['uid' => 'ada', 'id' => '7']);
 
         self::assertSame([], $this->http->calls);
-    }
-
-    /**
-     * @param mixed $argument
-     */
-    private function runEventsJob(PlatformLinkService $links, $argument): void
-    {
-        $jobs = $this->createMock(IJobList::class);
-        $jobs->method('add')->willReturnCallback(function (mixed $job, mixed $argument = null): void {
-            $this->queued[] = [is_string($job) ? $job : $job::class, $argument];
-        });
-        $job = new SourceEventsJob($links, $jobs);
-        $job->setArgument($argument);
-        $job->execute($this->createStub(IJobList::class));
     }
 
     /**

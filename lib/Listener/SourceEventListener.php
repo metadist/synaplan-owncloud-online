@@ -13,6 +13,7 @@ namespace OCA\OcoSynaplan\Listener;
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
+use OCA\OcoSynaplan\Service\SourceEventQueue;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCP\BackgroundJob\IJobList;
 use OCP\Files\FileInfo;
@@ -26,7 +27,8 @@ use OCP\IUserSession;
  * When a file changes, moves, goes to the trash or comes back from it, a
  * source event is queued for Synaplan, which applies it to the copies it
  * keeps of the file; for a folder that moves, goes or comes back, one for
- * each file and folder inside it too.
+ * each file and folder inside it too. Each person's events wait in their
+ * own queue, in the order they happened.
  */
 class SourceEventListener
 {
@@ -46,6 +48,7 @@ class SourceEventListener
         private IJobList $jobs,
         private IRootFolder $rootFolder,
         private IUserSession $userSession,
+        private SourceEventQueue $queue,
     ) {
     }
 
@@ -68,14 +71,14 @@ class SourceEventListener
     public function written(Node $node): void
     {
         if (!$this->muted()) {
-            $this->queue($this->payloads($node, 'changed', false));
+            $this->report($this->payloads($node, 'changed', false), SourceEventQueue::now());
         }
     }
 
     public function renamed(Node $target): void
     {
         if (!$this->muted()) {
-            $this->queue($this->payloads($target, 'moved', true));
+            $this->report($this->payloads($target, 'moved', true), SourceEventQueue::now());
         }
     }
 
@@ -91,7 +94,7 @@ class SourceEventListener
         $path = $node->getPath();
         $payloads = $this->deleting[$path] ?? [];
         unset($this->deleting[$path]);
-        $this->queue($payloads);
+        $this->report($payloads, SourceEventQueue::now());
     }
 
     /**
@@ -109,7 +112,7 @@ class SourceEventListener
         } catch (\Throwable) {
             return;
         }
-        $this->queue($this->payloads($node, 'restored', true));
+        $this->report($this->payloads($node, 'restored', true), SourceEventQueue::now());
     }
 
     private function muted(): bool
@@ -120,14 +123,22 @@ class SourceEventListener
     }
 
     /**
+     * Queue the events of one change in each person's queue, with the order
+     * of when it happened, and wake each person's job.
+     *
      * @param list<array{id: string, event: string, version: string, path: string, uid: string, owner: string}> $payloads
      */
-    private function queue(array $payloads): void
+    private function report(array $payloads, int $ord): void
     {
+        $people = [];
         foreach ($payloads as $payload) {
-            foreach ($this->perPerson($payload) as $job) {
-                $this->jobs->add(SourceEventsJob::class, $job);
+            foreach ($this->perPerson($payload) as $row) {
+                $this->queue->add($row['uid'], $row, $ord);
+                $people[$row['uid']] = true;
             }
+        }
+        foreach (array_keys($people) as $uid) {
+            $this->jobs->add(SourceEventsJob::class, ['uid' => (string) $uid]);
         }
     }
 

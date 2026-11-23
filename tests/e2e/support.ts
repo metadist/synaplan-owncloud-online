@@ -466,6 +466,62 @@ export function runJob(job: QueuedJob): void {
   occ('background:queue:execute', '--accept-warning', '--force', job.id)
 }
 
+/** A source event waiting in a person's queue for Synaplan (lib/Service/SourceEventQueue.php). */
+export interface QueuedEvent {
+  fileId: string
+  event: string
+  version: string
+  path: string
+  step: string
+  attempts: number
+}
+
+/**
+ * A person's source events waiting to be sent, oldest first, from the dev
+ * stack's database: no occ command shows them.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function queuedEvents(uid: string): QueuedEvent[] {
+  const script = [
+    'require "lib/base.php";',
+    '$qb = \\OC::$server->getDatabaseConnection()->getQueryBuilder();',
+    '$qb->select("*")->from("synaplan_source_events")',
+    '->where($qb->expr()->eq("uid", $qb->createNamedParameter($argv[1])))',
+    '->orderBy("ord", "ASC")->addOrderBy("seq", "ASC");',
+    'echo json_encode($qb->execute()->fetchAllAssociative());',
+  ].join(' ')
+  const run = spawnSync('docker', ['exec', '-u', 'www-data', OCO_CONTAINER, 'php', '-r', script, '--', uid], {
+    encoding: 'utf8',
+  })
+  if (run.status !== 0) {
+    throw new Error(`Could not read the source events of ${uid} in ${OCO_CONTAINER}. ${run.stderr || run.stdout}`)
+  }
+  const rows = JSON.parse(run.stdout.slice(run.stdout.indexOf('['))) as Record<string, string | null>[]
+  return rows.map((row) => ({
+    fileId: String(row.file_id),
+    event: String(row.event),
+    version: row.version ?? '',
+    path: row.path ?? '',
+    step: String(row.step),
+    attempts: Number(row.attempts),
+  }))
+}
+
+/**
+ * Run a person's source events job now, as cron would: it tells Synaplan of
+ * what is due in their queue.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function runSourceEvents(uid: string): void {
+  const job = queuedJobs('SourceEventsJob').find((queued) => queued.argument === JSON.stringify({ uid }))
+  if (job === undefined) {
+    throw new Error(`No source events job of ${uid} waits in ${OCO_CONTAINER}.`)
+  }
+  runJob(job)
+}
+
 /** One Synaplan file made of an ownCloud.online file; `deletedAt` is 0 until Synaplan heard it went to the trash. */
 export interface SynaplanFileRow {
   id: number

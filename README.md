@@ -169,11 +169,16 @@ asks Synaplan about the files it shows, up to 500 at a time, and keeps each
 answer for a minute or until that file changes. While Synaplan does not
 answer, no bird shows and the tab says "Couldn't check Synaplan right now".
 
-When a file changes, moves, goes to the trash or comes back from it, a
-background job tells Synaplan with the person's credential, and for a shared
-file with its owner's too; for a folder, it also tells each file and folder
-inside it. A path longer than Synaplan's 255 bytes is sent empty, and
-Synaplan keeps the name it has. When Synaplan keeps the file up to date, it
+When a file changes, moves, goes to the trash or comes back from it, the app
+queues the event for the person it happened to, and for a shared file for its
+owner too; for a folder, also for each file and folder inside it. Each
+person's background job tells Synaplan of their events with their own
+credential, in the order they happened, up to 100 to a call. Events Synaplan
+cannot take yet are tried again after 1, 5, 15 and 60 minutes, and given up
+after that; the person's later events wait for them, so a restore never
+reaches Synaplan before the deletion it undoes. A path longer than
+Synaplan's 255 bytes is sent empty, and Synaplan keeps the name it has.
+When Synaplan keeps the file up to date, it
 asks for the new version, and another background job uploads it with that
 person's credential, in place of Synaplan's copy. A file in the trash leaves
 the AI's search; restored, it comes back as the same file in Synaplan.
@@ -380,11 +385,13 @@ install sets the address Synaplan uses to reach it to
 `http://localhost:8083` (`overwrite.cli.url`). Every start sets
 `memcache.local` to APCu.
 
-ownCloud.online adds an app's background jobs when it installs or upgrades
-the app, not on `app:enable`. A dev stack installed with an older version of
-the app gets new jobs with fresh volumes (`make dev-reset dev-up`) or with
+ownCloud.online adds an app's background jobs and creates its tables (the
+migrations in `appinfo/Migrations`) when it installs or upgrades the app, not
+on `app:enable`. A dev stack installed with an older version of the app gets
+them with fresh volumes (`make dev-reset dev-up`) or with
 `make dev-occ CMD="config:app:set oco_synaplan installed_version --value 0"`
-followed by `make dev-occ CMD="upgrade"`.
+followed by `make dev-occ CMD="upgrade"`; for the tables alone,
+`make dev-occ CMD="migrations:migrate oco_synaplan"`.
 
 The frontend is built as self-contained IIFE bundles (Vue 3 bundled) because
 ownCloud.online loads app scripts as classic `<script>` tags. Entry points:

@@ -10,8 +10,11 @@ import {
   OCO_URL,
   openFileMenu,
   ownCloudAs,
+  type QueuedEvent,
+  queuedEvents,
   queuedJobs,
   runJob,
+  runSourceEvents,
   SYNAPLAN_PERSON,
   synaplanAs,
   synaplanFilesOf,
@@ -88,9 +91,9 @@ async function shelf(dav: APIRequestContext, stamp: number): Promise<Shelf> {
     await put(dav, `${folder}/${other}`, `Notes ${stamp}: nothing for Synaplan.`)
     const heldId = await fileIdAt(dav, `${folder}/${held}`)
     const otherId = await fileIdAt(dav, `${folder}/${other}`)
-    for (const report of [...reportOf(heldId, 'changed'), ...reportOf(otherId, 'changed')]) {
-      runJob(report)
-    }
+    expect(reportOf(heldId, 'changed'), 'the writes wait for cron').not.toEqual([])
+    runSourceEvents(UID)
+    expect(queuedEvents(UID), 'Synaplan heard of the writes').toEqual([])
     return { folder, held, other, heldId, otherId }
   })
 }
@@ -131,11 +134,27 @@ async function foundInFolder(synaplan: APIRequestContext, folder: string): Promi
   return [...new Set(((await found.json()) as { results: { file_id: number }[] }).results.map((r) => r.file_id))]
 }
 
-/** The app's queued reports of one event about one file, oldest first, as cron runs them. */
-function reportOf(fileId: string, event: string) {
-  return queuedJobs('SourceEventsJob').filter(
-    (job) => job.argument.includes(`"id":"${fileId}"`) && job.argument.includes(`"event":"${event}"`),
-  )
+/** Bring a file of Ada's back from the trash to where it was. */
+async function restore(dav: APIRequestContext, path: string): Promise<void> {
+  const trash = await dav.fetch(`/remote.php/dav/trash-bin/${UID}/`, {
+    method: 'PROPFIND',
+    headers: { Depth: '1', 'Content-Type': 'application/xml' },
+    data: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:trashbin-original-location/></d:prop></d:propfind>',
+  })
+  const item = new RegExp(
+    `<d:href>([^<]+)</d:href>\\s*<d:propstat>\\s*<d:prop>\\s*<oc:trashbin-original-location>${path}<`,
+  ).exec(await trash.text())?.[1]
+  expect(item, `${path} is in the trash`).toBeTruthy()
+  const restored = await dav.fetch(item as string, {
+    method: 'MOVE',
+    headers: { Destination: `${OCO_URL}${DAV}/${path}` },
+  })
+  expect(restored.ok(), `restoring ${path}: HTTP ${restored.status()}`).toBe(true)
+}
+
+/** The events of one kind about one file waiting in Ada's queue, oldest first. */
+function reportOf(fileId: string, event: string): QueuedEvent[] {
+  return queuedEvents(UID).filter((queued) => queued.fileId === fileId && queued.event === event)
 }
 
 test.describe('the state of a file in Synaplan', () => {
@@ -217,11 +236,10 @@ test.describe('the state of a file in Synaplan', () => {
 
       await withoutCron(async () => {
         await change(dav, `${folder}/${held}`, stamp)
-        const reports = reportOf(heldId, 'changed')
-        expect(reports.at(-1)?.argument, 'the change waits for cron').toContain(`"uid":"${UID}"`)
+        expect(reportOf(heldId, 'changed'), 'the change waits for cron').not.toEqual([])
         expect((await detailOf(person, heldId)).state, 'Synaplan sees the new version').toBe('updating')
 
-        reports.forEach(runJob)
+        runSourceEvents(UID)
         const reuploads = queuedJobs('ReuploadJob').filter((job) => job.argument.includes(`"id":"${heldId}"`))
         expect(reuploads, 'Synaplan asked for the new version').toHaveLength(1)
         // Synaplan names the oldest account its person has here, ended ones
@@ -268,9 +286,8 @@ test.describe('the state of a file in Synaplan', () => {
       await withoutCron(async () => {
         await change(dav, `${folder}/${held}`, stamp)
         expect((await detailOf(person, heldId)).state, 'Synaplan sees the new version').toBe('changed')
-        const reports = reportOf(heldId, 'changed')
-        expect(reports, 'the change waits for cron').not.toEqual([])
-        reports.forEach(runJob)
+        expect(reportOf(heldId, 'changed'), 'the change waits for cron').not.toEqual([])
+        runSourceEvents(UID)
         expect(queuedJobs('ReuploadJob').filter((job) => job.argument.includes(`"id":"${heldId}"`))).toEqual([])
       })
       expect((await detailOf(person, heldId)).state).toBe('changed')
@@ -302,37 +319,60 @@ test.describe('the state of a file in Synaplan', () => {
         expect((await dav.delete(`${DAV}/${folder}/${held}`)).ok(), 'moving the file to the trash').toBe(true)
         const [report] = reportOf(heldId, 'deleted')
         expect(report, 'the deletion waits for cron').toBeTruthy()
-        expect(report.argument).toContain(`"path":"${folder}\\/${held}"`)
-        runJob(report)
+        expect(report.path).toBe(`${folder}/${held}`)
+        runSourceEvents(UID)
       })
       expect(await listedInSynaplan(synaplan)).not.toContain(synaplanFileId)
       expect(await foundInFolder(synaplan, knowledge)).toEqual([])
       const [trashed] = synaplanFilesOf(instance, heldId)
       expect(trashed.deletedAt, 'Synaplan noted when the file went to the trash').toBeGreaterThan(0)
 
-      const trash = await dav.fetch(`/remote.php/dav/trash-bin/${UID}/`, {
-        method: 'PROPFIND',
-        headers: { Depth: '1', 'Content-Type': 'application/xml' },
-        data: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:trashbin-original-location/></d:prop></d:propfind>',
-      })
-      const item = new RegExp(
-        `<d:href>([^<]+)</d:href>\\s*<d:propstat>\\s*<d:prop>\\s*<oc:trashbin-original-location>${folder}/${held}<`,
-      ).exec(await trash.text())?.[1]
-      expect(item, 'the file is in the trash').toBeTruthy()
-
       await withoutCron(async () => {
-        const restored = await dav.fetch(item as string, {
-          method: 'MOVE',
-          headers: { Destination: `${OCO_URL}${DAV}/${folder}/${held}` },
-        })
-        expect(restored.ok(), `restoring the file: HTTP ${restored.status()}`).toBe(true)
-        const [report] = reportOf(heldId, 'restored')
-        expect(report, 'the restore waits for cron').toBeTruthy()
-        runJob(report)
+        await restore(dav, `${folder}/${held}`)
+        expect(reportOf(heldId, 'restored'), 'the restore waits for cron').not.toEqual([])
+        runSourceEvents(UID)
       })
       expect(await fileIdAt(dav, `${folder}/${held}`), 'the same file').toBe(heldId)
       expect(synaplanFilesOf(instance, heldId), 'no new Synaplan file').toEqual([{ id: synaplanFileId, deletedAt: 0 }])
       expect(await listedInSynaplan(synaplan)).toContain(synaplanFileId)
+      expect(await foundInFolder(synaplan, knowledge)).toEqual([synaplanFileId])
+      expect(await detailOf(person, heldId)).toMatchObject({ state: 'searchable' })
+    } finally {
+      await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await synaplan.dispose()
+      await person.dispose()
+      await dav.dispose()
+    }
+  })
+
+  test('a file trashed and restored before cron runs reaches Synaplan in that order', async () => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const person = await ownCloudAs(UID)
+    const synaplan = await synaplanAs(SYNAPLAN_PERSON)
+    const instance = await instanceId()
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    const knowledge = `Order-${stamp}`
+    try {
+      await makeSearchable(person, heldId, knowledge, true)
+      const { synaplanFileId } = await detailOf(person, heldId)
+
+      await withoutCron(async () => {
+        expect((await dav.delete(`${DAV}/${folder}/${held}`)).ok(), 'moving the file to the trash').toBe(true)
+        await restore(dav, `${folder}/${held}`)
+        const events = queuedEvents(UID)
+          .filter((queued) => queued.fileId === heldId)
+          .map((queued) => queued.event)
+        expect(events, 'both wait for cron').toEqual(expect.arrayContaining(['deleted', 'restored']))
+        expect(events.indexOf('deleted'), 'the deletion first').toBeLessThan(events.indexOf('restored'))
+
+        runSourceEvents(UID)
+        expect(queuedEvents(UID), 'one run tells Synaplan of both').toEqual([])
+      })
+      expect(synaplanFilesOf(instance, heldId), 'the same Synaplan file, not in the trash').toEqual([
+        { id: synaplanFileId, deletedAt: 0 },
+      ])
       expect(await foundInFolder(synaplan, knowledge)).toEqual([synaplanFileId])
       expect(await detailOf(person, heldId)).toMatchObject({ state: 'searchable' })
     } finally {
