@@ -60,12 +60,30 @@ final class ArraySourceEventQueue extends SourceEventQueue
         $this->fileCache[] = ['storage' => $storage, 'path' => $path, 'id' => $id, 'etag' => $etag];
     }
 
-    public function addDescendants(string $uid, int $folderId, string $event, int $ord, string $step, int $walked = 0): void
+    public function addDescendants(string $uid, int $folderId, string $event, int $ord, string $step, int $walked = 0, array $except = []): void
     {
         ++$this->cacheReads;
+        $folderPath = $this->location($folderId)['path'] ?? '';
         foreach ($this->below($folderId) as $entry) {
+            $path = ltrim($folderPath . '/' . $entry['path'], '/');
+            foreach ($except as $kept) {
+                if ($path === $kept || str_starts_with($path, $kept . '/')) {
+                    continue 2;
+                }
+            }
             $this->add($uid, ['id' => (string) $entry['id'], 'event' => $event, 'version' => $entry['etag'], 'path' => ''], $ord, $step, $walked);
         }
+    }
+
+    public function location(int $fileId): ?array
+    {
+        foreach ($this->fileCache as $entry) {
+            if ($entry['id'] === $fileId) {
+                return ['storage' => $entry['storage'], 'path' => $entry['path']];
+            }
+        }
+
+        return null;
     }
 
     public function descendants(int $folderId, int $afterId, int $limit): array

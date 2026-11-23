@@ -21,6 +21,7 @@ use OCA\OcoSynaplan\Notification\CopyNotifier;
 use OCA\OcoSynaplan\Service\Notices;
 use OCP\Files\Node;
 use OCP\IUser;
+use OCP\Share\IShare;
 use OCP\Util;
 use Symfony\Component\EventDispatcher\GenericEvent;
 
@@ -95,6 +96,16 @@ $root->listen('\OC\Files', 'postDelete', function ($node) use ($sourceEvents) {
     }
 });
 Util::connectHook('\OCA\Files_Trashbin\Trashbin', 'post_restore', SourceEventListener::class, 'onRestore');
+// A share its recipient removes from their files, or declines, is unmounted:
+// nothing is deleted, but their copies of what it holds are gone for them.
+Util::connectHook('OC_Filesystem', 'umount', SourceEventListener::class, 'onUnmounting');
+Util::connectHook('OC_Filesystem', 'post_umount', SourceEventListener::class, 'onUnmounted');
+$dispatcher->addListener('share.afterreject', function ($event) use ($sourceEvents) {
+    $share = $event instanceof GenericEvent && $event->hasArgument('share') ? $event->getArgument('share') : null;
+    if ($share instanceof IShare) {
+        $sourceEvents()->rejected($share);
+    }
+});
 $dispatcher->addListener('OC\User\User::postSetEnabled', function ($event) use ($container) {
     $user = $event instanceof GenericEvent ? $event->getSubject() : null;
     if ($user instanceof IUser) {

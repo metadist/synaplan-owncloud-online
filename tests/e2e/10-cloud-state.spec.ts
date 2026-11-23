@@ -605,6 +605,70 @@ test.describe('the state of a file in Synaplan', () => {
     }
   })
 
+  test('the person a folder is shared with removes it from their files or declines it, and their copies of what they no longer reach leave Synaplan', async ({
+    browser,
+  }) => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const instance = await instanceId()
+    const removed = await shelf(dav, stamp)
+    const declined = await shelf(dav, stamp + 1)
+    try {
+      await withRecipient(browser, stamp, async (gus, theirs, theirDav) => {
+        await shareWith(UID, removed.folder, gus)
+        await shareWith(UID, `${removed.folder}/${removed.held}`, gus)
+        const declinedShare = await shareWith(UID, declined.folder, gus)
+        const copyOf = async (heldId: string): Promise<number> => {
+          await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
+          const { synaplanFileId } = await detailOf(theirs, heldId)
+          expect(synaplanFileId, 'Gus has a copy of his own').toBeTruthy()
+          return synaplanFileId as number
+        }
+        const deletedOf = (heldId: string, copy: number): number | undefined =>
+          synaplanFilesOf(instance, heldId).find((file) => file.id === copy)?.deletedAt
+        const deletions = (): string[] =>
+          queuedEvents(gus)
+            .filter((queued) => queued.step === 'send' && queued.event === 'deleted' && queued.path === '')
+            .map((queued) => queued.fileId)
+        const keptCopy = await copyOf(removed.heldId)
+        const removedCopy = await copyOf(removed.otherId)
+        const declinedCopy = await copyOf(declined.heldId)
+
+        await withoutCron(async () => {
+          const unshared = await theirDav.delete(`/remote.php/dav/files/${gus}/${removed.folder}`)
+          expect(unshared.ok(), `Gus removes the share: HTTP ${unshared.status()}`).toBe(true)
+          expect(deletions(), 'the file he reaches no other way, then the folder, for Gus').toEqual([
+            removed.otherId,
+            await fileIdAt(dav, removed.folder),
+          ])
+          expect(stepsOf(UID), 'nothing changed for Ada').toEqual([])
+          runSourceEvents(gus)
+        })
+        expect(deletedOf(removed.otherId, removedCopy), 'Gus’s copy left Synaplan').toBeGreaterThan(0)
+        expect(deletedOf(removed.heldId, keptCopy), 'his copy of the file still shared with him stays').toBeFalsy()
+        expect(await fileIdAt(dav, `${removed.folder}/${removed.held}`), 'Ada keeps her file').toBe(removed.heldId)
+
+        await withoutCron(async () => {
+          const declinedNow = await theirDav.delete(
+            `/ocs/v2.php/apps/files_sharing/api/v1/shares/pending/${declinedShare}?format=json`,
+            { headers: { 'OCS-APIREQUEST': 'true' } },
+          )
+          expect(declinedNow.ok(), `Gus declines the share: HTTP ${declinedNow.status()}`).toBe(true)
+          expect(deletions().sort(), 'the folder and the files in it, for Gus').toEqual(
+            [declined.heldId, declined.otherId, await fileIdAt(dav, declined.folder)].sort(),
+          )
+          expect(stepsOf(UID), 'nothing changed for Ada').toEqual([])
+          runSourceEvents(gus)
+        })
+        expect(deletedOf(declined.heldId, declinedCopy), 'Gus’s copy left Synaplan').toBeGreaterThan(0)
+      })
+    } finally {
+      await dav.delete(`${DAV}/${removed.folder}`)
+      await dav.delete(`${DAV}/${declined.folder}`)
+      await dav.dispose()
+    }
+  })
+
   test('with dev_mute_events the app tells Synaplan of no change', async () => {
     const stamp = Date.now()
     const dav = await davAs(UID)

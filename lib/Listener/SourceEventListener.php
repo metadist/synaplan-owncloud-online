@@ -23,19 +23,30 @@ use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\IConfig;
 use OCP\IUserSession;
+use OCP\Share;
+use OCP\Share\IShare;
 
 /**
- * When a file changes, moves, goes to the trash or comes back from it, a
- * source event is queued for Synaplan, which applies it to the copies it
- * keeps of the file; for a folder that moves, goes or comes back, one for
- * each file and folder inside it too. Each person's events wait in their
- * own queue, in the order they happened. The request reads no node below a
- * folder: its files come from the file cache, or, for a move, from the
- * background job.
+ * When a file changes, moves, goes to the trash or comes back from it, or a
+ * recipient removes a share from their files, a source event is queued for
+ * Synaplan, which applies it to the copies it keeps of the file; for a
+ * folder that moves, goes or comes back, one for each file and folder inside
+ * it too. Each person's events wait in their own queue, in the order they
+ * happened. The request reads no node below a folder: its files come from
+ * the file cache, or, for a move, from the background job.
  */
 class SourceEventListener
 {
     public const DEV_MUTE = 'dev_mute_events';
+    private const SHARED_STORAGE = 'OCA\Files_Sharing\SharedStorage';
+
+    /**
+     * The shares someone is removing from their files, by `uid:path`. Static:
+     * the hooks before and after the unmount each build their own listener.
+     *
+     * @var array<string, Node>
+     */
+    private static array $leaving = [];
 
     /**
      * The event a delete reports once it went through, by the path deleted:
@@ -68,6 +79,35 @@ class SourceEventListener
             /** @var self $listener */
             $listener = (new Application())->getContainer()->query(self::class);
             $listener->restored($params);
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * Removing a share from one's files unmounts it: ownCloud.online deletes
+     * nothing and tells a hook before and after, each calling a static slot.
+     *
+     * @param array<string, mixed> $params the mount point's `path` in the files of the person removing it
+     */
+    public static function onUnmounting(array $params): void
+    {
+        try {
+            /** @var self $listener */
+            $listener = (new Application())->getContainer()->query(self::class);
+            $listener->unmounting($params);
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $params the mount point's `path` in the files of the person removing it
+     */
+    public static function onUnmounted(array $params): void
+    {
+        try {
+            /** @var self $listener */
+            $listener = (new Application())->getContainer()->query(self::class);
+            $listener->unmounted($params);
         } catch (\Throwable) {
         }
     }
@@ -149,6 +189,86 @@ class SourceEventListener
             return;
         }
         $this->report($node, $this->payload($node, 'restored', true), SourceEventQueue::now());
+    }
+
+    /**
+     * Before a share leaves someone's files. A node reads its file info on
+     * first use, which finds nothing once the share is unmounted, so its id
+     * is read here.
+     *
+     * @param array<string, mixed> $params
+     */
+    public function unmounting(array $params): void
+    {
+        $user = $this->userSession->getUser();
+        $path = is_string($params['path'] ?? null) ? trim($params['path'], '/') : '';
+        if ($user === null || $path === '' || $this->muted()) {
+            return;
+        }
+        try {
+            $node = $this->rootFolder->getUserFolder($user->getUID())->get($path);
+            if ($node->getId() > 0 && self::isMountRoot($node) && $node->getStorage()->instanceOfStorage(self::SHARED_STORAGE)) {
+                self::$leaving[$user->getUID() . ':' . $path] = $node;
+            }
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    public function unmounted(array $params): void
+    {
+        $uid = $this->userSession->getUser()?->getUID() ?? '';
+        $key = $uid . ':' . (is_string($params['path'] ?? null) ? trim($params['path'], '/') : '');
+        $node = self::$leaving[$key] ?? null;
+        unset(self::$leaving[$key]);
+        if ($node !== null) {
+            $this->leftShare($uid, $node, SourceEventQueue::now());
+        }
+    }
+
+    /**
+     * Declining a share through the share API unmounts it too. The share
+     * names its recipient for a share with one person; a group's member who
+     * declines is the person signed in.
+     */
+    public function rejected(IShare $share): void
+    {
+        $user = $this->userSession->getUser();
+        if ($user === null || $this->muted()) {
+            return;
+        }
+        try {
+            $uid = $share->getShareType() === Share::SHARE_TYPE_USER ? (string) $share->getSharedWith() : $user->getUID();
+            $node = $share->getNode();
+        } catch (\Throwable) {
+            return;
+        }
+        $this->leftShare($uid, $node, SourceEventQueue::now());
+    }
+
+    /**
+     * Removing a share deletes nothing in ownCloud.online, but for its
+     * recipient what it held is gone as if deleted, except what they still
+     * reach through a share of their own further down.
+     */
+    private function leftShare(string $uid, Node $node, int $ord): void
+    {
+        try {
+            if (!$this->recipients->lost($node, $uid)) {
+                return;
+            }
+            $id = (int) $node->getId();
+            $folder = $node instanceof Folder ? $this->queue->location($id) : null;
+            if ($folder !== null) {
+                $this->queue->addDescendants($uid, $id, 'deleted', $ord, SourceEventQueue::STEP_SEND, 0, $this->recipients->keptBelow($uid, $folder));
+            }
+            $this->queue->add($uid, ['id' => (string) $id, 'event' => 'deleted', 'version' => substr((string) $node->getEtag(), 0, 255), 'path' => ''], $ord);
+            $this->jobs->add(SourceEventsJob::class, ['uid' => $uid]);
+        } catch (\Throwable) {
+            // Best effort: the share is gone either way.
+        }
     }
 
     private function muted(): bool

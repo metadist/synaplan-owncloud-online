@@ -16,7 +16,10 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Files\Storage;
 use OCP\IUser;
+use OCP\Share;
+use OCP\Share\IShare;
 use PHPUnit\Framework\TestCase;
 
 final class SourceEventListenerTest extends TestCase
@@ -34,6 +37,14 @@ final class SourceEventListenerTest extends TestCase
     /** @var array<int, list<string>> who else holds each file id, with a credential */
     private array $sharedWith = [];
 
+    /** @var list<string> the people with a credential who no longer reach what a share held */
+    private array $losing = [];
+
+    /** @var list<string> the file cache paths below a share its recipient still has mounted */
+    private array $kept = [];
+
+    private bool $unmounted = false;
+
     protected function setUp(): void
     {
         $this->setUpServices(['mode' => 'link', 'link_instance_id' => 'client-1']);
@@ -41,6 +52,9 @@ final class SourceEventListenerTest extends TestCase
         $this->queued = [];
         $this->userFolders = [];
         $this->sharedWith = [];
+        $this->losing = [];
+        $this->kept = [];
+        $this->unmounted = false;
         $this->events = new ArraySourceEventQueue();
     }
 
@@ -286,7 +300,8 @@ final class SourceEventListenerTest extends TestCase
             $this->config->setAppValue('oco_synaplan', $key, $value);
         }
         $file = $this->file(7, '/ada/files/a.txt', 'ada');
-        $this->userFolders['ada'] = $this->userFolder([], ['a.txt' => $file]);
+        $this->losing = ['ada'];
+        $this->userFolders['ada'] = $this->userFolder([], ['a.txt' => $file, 'Specs' => $this->shareOfSpecs('/ada/files/Specs')]);
 
         $listener = $this->listener();
         $listener->written($file);
@@ -294,6 +309,86 @@ final class SourceEventListenerTest extends TestCase
         $listener->deleting($file);
         $listener->deleted($file);
         $listener->restored(['filePath' => '/a.txt']);
+        $listener->unmounting(['path' => '/Specs']);
+        $listener->unmounted(['path' => '/Specs']);
+        $listener->rejected($this->share(Share::SHARE_TYPE_USER, 'ada', $file));
+
+        self::assertSame([], $this->events->rows);
+        self::assertSame([], $this->queued);
+    }
+
+    public function testARecipientWhoRemovesASharedFolderHasTheirCopiesOfItsFilesDeleted(): void
+    {
+        $this->signIn($this->person('bob'));
+        $this->losing = ['bob'];
+        $this->userFolders['bob'] = $this->userFolder([], ['Specs' => $this->shareOfSpecs()]);
+
+        $this->unmount($this->listener(), '/Specs');
+
+        self::assertSame(['bob send 51', 'bob send 52', 'bob send 50'], $this->events->steps());
+        self::assertSame([['deleted', ''], ['deleted', ''], ['deleted', '']], array_map(
+            static fn (array $event): array => [$event['event'], $event['path']],
+            $this->events->events(),
+        ));
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
+    }
+
+    public function testARecipientWhoDeclinesASharedFolderHasTheirCopiesOfItsFilesDeleted(): void
+    {
+        $this->signIn($this->person('bob'));
+        $this->losing = ['bob'];
+
+        $this->listener()->rejected($this->share(Share::SHARE_TYPE_USER, 'bob', $this->specsFolder()));
+
+        self::assertSame(['bob send 51', 'bob send 52', 'bob send 50'], $this->events->steps());
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
+    }
+
+    public function testWhoDeclinesAGroupShareIsThePersonSignedIn(): void
+    {
+        $this->signIn($this->person('carol'));
+        $this->losing = ['carol'];
+
+        $this->listener()->rejected($this->share(Share::SHARE_TYPE_GROUP, 'staff', $this->file(42, '/ada/files/spec.pdf', 'ada', 'e42')));
+
+        self::assertSame([['uid' => 'carol', 'id' => '42', 'event' => 'deleted', 'version' => 'e42', 'path' => '']], $this->events->events());
+    }
+
+    public function testARecipientWhoStillReachesTheFilesKeepsTheirCopies(): void
+    {
+        $this->signIn($this->person('bob'));
+        $this->userFolders['bob'] = $this->userFolder([], ['Specs' => $this->shareOfSpecs()]);
+
+        $listener = $this->listener();
+        $this->unmount($listener, '/Specs');
+        $listener->rejected($this->share(Share::SHARE_TYPE_USER, 'bob', $this->specsFolder()));
+
+        self::assertSame([], $this->events->rows);
+        self::assertSame([], $this->queued);
+    }
+
+    public function testARecipientKeepsTheirCopiesOfAFolderTheyStillHaveAShareOfTheirOwn(): void
+    {
+        $this->signIn($this->person('bob'));
+        $this->losing = ['bob'];
+        $this->kept = ['files/Specs/Old'];
+        $this->userFolders['bob'] = $this->userFolder([], ['Specs' => $this->shareOfSpecs()]);
+        $this->events->cache(3, 'files/Specs/Old', 53);
+
+        $this->unmount($this->listener(), '/Specs');
+
+        self::assertSame(['bob send 51', 'bob send 50'], $this->events->steps());
+    }
+
+    public function testRemovingAMountThatIsNoShareQueuesNothing(): void
+    {
+        $this->signIn($this->person('bob'));
+        $this->losing = ['bob'];
+        $this->userFolders['bob'] = $this->userFolder([], ['Drive' => $this->shareOfSpecs('/bob/files/Drive', false)]);
+
+        $listener = $this->listener();
+        $this->unmount($listener, '/Drive');
+        $listener->unmounted(['path' => '/Specs']);
 
         self::assertSame([], $this->events->rows);
         self::assertSame([], $this->queued);
@@ -309,6 +404,8 @@ final class SourceEventListenerTest extends TestCase
         $root->method('getUserFolder')->willReturnCallback(fn (string $uid): Folder => $this->userFolders[$uid] ?? $this->userFolder([]));
         $recipients = $this->createStub(ShareRecipients::class);
         $recipients->method('of')->willReturnCallback(fn (Node $node): array => $this->sharedWith[(int) $node->getId()] ?? []);
+        $recipients->method('lost')->willReturnCallback(fn (Node $node, string $uid): bool => in_array($uid, $this->losing, true));
+        $recipients->method('keptBelow')->willReturnCallback(fn (): array => $this->kept);
 
         return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session(), $this->events, $recipients);
     }
@@ -339,10 +436,7 @@ final class SourceEventListenerTest extends TestCase
      */
     private function specsFolder(string $path = '/ada/files/Specs', string $internalPath = 'files/Specs', string $owner = 'ada'): Folder
     {
-        $this->events->cache(3, 'files/Specs', 50, 'ef');
-        $this->events->cache(3, 'files/Specs/a.pdf', 51, 'ea');
-        $this->events->cache(3, 'files/Specs/Old/b.pdf', 52, 'eb');
-        $this->events->cache(3, 'files/Specsheet.pdf', 60);
+        $this->cacheSpecs();
         $folder = $this->createMock(Folder::class);
         $folder->method('getType')->willReturn(FileInfo::TYPE_FOLDER);
         $folder->method('getId')->willReturn(50);
@@ -376,6 +470,69 @@ final class SourceEventListenerTest extends TestCase
         $folder->expects($this->never())->method('getDirectoryListing');
 
         return $folder;
+    }
+
+    private function cacheSpecs(): void
+    {
+        $this->events->cache(3, 'files/Specs', 50, 'ef');
+        $this->events->cache(3, 'files/Specs/a.pdf', 51, 'ea');
+        $this->events->cache(3, 'files/Specs/Old/b.pdf', 52, 'eb');
+        $this->events->cache(3, 'files/Specsheet.pdf', 60);
+    }
+
+    /**
+     * Ada's `Specs` as the root of a mount at `$path`: a share Bob received,
+     * or, with `$shared` false, a storage he mounted himself. Like ownCloud's
+     * nodes, it reads its file info on first use, and finds none once
+     * unmount() took the mount away.
+     */
+    private function shareOfSpecs(string $path = '/bob/files/Specs', bool $shared = true): Folder
+    {
+        $this->cacheSpecs();
+        $storage = $this->createStub(Storage::class);
+        $storage->method('instanceOfStorage')->willReturnCallback(
+            static fn (string $class): bool => $shared && $class === 'OCA\Files_Sharing\SharedStorage',
+        );
+        $info = null;
+        $read = function (string $key) use (&$info): int|string {
+            if ($info === null && $this->unmounted) {
+                throw new NotFoundException();
+            }
+            $info ??= ['id' => 50, 'etag' => 'ef'];
+
+            return $info[$key];
+        };
+        $folder = $this->createMock(Folder::class);
+        $folder->method('getType')->willReturn(FileInfo::TYPE_FOLDER);
+        $folder->method('getId')->willReturnCallback(fn (): int|string => $read('id'));
+        $folder->method('getEtag')->willReturnCallback(fn (): int|string => $read('etag'));
+        $folder->method('getPath')->willReturn($path);
+        $folder->method('getInternalPath')->willReturn('');
+        $folder->method('getStorage')->willReturn($storage);
+        $folder->method('getOwner')->willReturn($this->owner('ada'));
+        $folder->expects($this->never())->method('getDirectoryListing');
+
+        return $folder;
+    }
+
+    /**
+     * What ownCloud does when someone removes a mount from their files.
+     */
+    private function unmount(SourceEventListener $listener, string $path): void
+    {
+        $listener->unmounting(['path' => $path]);
+        $this->unmounted = true;
+        $listener->unmounted(['path' => $path]);
+    }
+
+    private function share(int $type, string $with, Node $node): IShare
+    {
+        $share = $this->createStub(IShare::class);
+        $share->method('getShareType')->willReturn($type);
+        $share->method('getSharedWith')->willReturn($with);
+        $share->method('getNode')->willReturn($node);
+
+        return $share;
     }
 
     /**

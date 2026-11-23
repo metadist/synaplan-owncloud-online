@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\Service;
 
+use OCP\Files\Config\IUserMountCache;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
+use OCP\IUserManager;
 use OCP\Share;
 
 /**
@@ -26,6 +28,9 @@ class ShareRecipients
     public function __construct(
         private UserAccountService $accounts,
         private IRootFolder $rootFolder,
+        private IUserMountCache $mounts,
+        private IUserManager $users,
+        private SourceEventQueue $queue,
         ?\Closure $sharing = null,
     ) {
         // ownCloud.online's IManager::getAccessList() is empty.
@@ -59,5 +64,51 @@ class ShareRecipients
         }
 
         return $out;
+    }
+
+    /**
+     * Whether a person who can tell Synaplan has no way left to the node:
+     * the share API still names them for a share they removed or declined,
+     * so only their own files, which leave it out, say so.
+     */
+    public function lost(Node $node, string $uid): bool
+    {
+        if ($uid === '' || !$this->accounts->holdsCredential($uid)) {
+            return false;
+        }
+        try {
+            return $this->rootFolder->getUserFolder($uid)->getById((int) $node->getId()) === [];
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * The file cache paths of the folders below a folder that a person still
+     * has mounted on their own, such as a share of a subfolder. The mount
+     * cache knows a mount's root by its id, the file cache knows its path.
+     *
+     * @param array{storage: int, path: string} $folder
+     * @return list<string>
+     */
+    public function keptBelow(string $uid, array $folder): array
+    {
+        $user = $this->users->get($uid);
+        if ($user === null) {
+            return [];
+        }
+        $prefix = $folder['path'] === '' ? '' : $folder['path'] . '/';
+        $kept = [];
+        foreach ($this->mounts->getMountsForUser($user) as $mount) {
+            if ((int) $mount->getStorageId() !== $folder['storage']) {
+                continue;
+            }
+            $root = $this->queue->location((int) $mount->getRootId());
+            if ($root !== null && $root['path'] !== $folder['path'] && str_starts_with($root['path'], $prefix)) {
+                $kept[] = $root['path'];
+            }
+        }
+
+        return $kept;
     }
 }
