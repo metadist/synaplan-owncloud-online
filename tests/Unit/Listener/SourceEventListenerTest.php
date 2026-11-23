@@ -113,6 +113,32 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame(['ada send 51', 'ada send 52', 'bob send 51', 'bob send 52', 'bob send 50', 'ada send 50'], $this->events->steps());
     }
 
+    public function testAFolderInsideAShareTheRecipientDeletesQueuesItsFiles(): void
+    {
+        $listener = $this->listener();
+        $listener->deleting($this->oldFolderSeenByBob());
+        $listener->deleted($this->gone('/bob/files/Specs/Old'));
+
+        self::assertSame(['bob send 52', 'ada send 52', 'bob send 53', 'ada send 53'], $this->events->steps());
+    }
+
+    public function testASharedFolderTheRecipientRenamesIsWalkedFromItsOwnPath(): void
+    {
+        $this->listener()->renamed($this->specsFolder('/bob/files/Specs 2026', '', ''));
+
+        self::assertSame(['bob share 50', 'bob send 50', 'bob walk 50'], $this->events->steps());
+        self::assertSame('Specs 2026', array_values($this->events->rows)[2]['path']);
+        self::assertSame(0, $this->events->cacheReads);
+    }
+
+    public function testAFolderInsideAShareTheRecipientMovesIsWalkedFromItsOwnPath(): void
+    {
+        $this->listener()->renamed($this->oldFolderSeenByBob());
+
+        self::assertSame(['bob share 53', 'bob send 53', 'bob walk 53', 'ada send 53', 'ada walk 53'], $this->events->steps());
+        self::assertSame('Specs/Old', array_values($this->events->rows)[2]['path']);
+    }
+
     public function testAMovedFolderLeavesItsFilesToTheJob(): void
     {
         $this->listener()->renamed($this->specsFolder());
@@ -310,7 +336,7 @@ final class SourceEventListenerTest extends TestCase
      * Ada's folder `Specs` on storage 3, with two files below it in the file
      * cache, as seen at `$path`. Listing it fails the test.
      */
-    private function specsFolder(string $path = '/ada/files/Specs'): Folder
+    private function specsFolder(string $path = '/ada/files/Specs', string $internalPath = 'files/Specs', string $owner = 'ada'): Folder
     {
         $this->events->cache(3, 'files/Specs', 50, 'ef');
         $this->events->cache(3, 'files/Specs/a.pdf', 51, 'ea');
@@ -320,7 +346,31 @@ final class SourceEventListenerTest extends TestCase
         $folder->method('getType')->willReturn(FileInfo::TYPE_FOLDER);
         $folder->method('getId')->willReturn(50);
         $folder->method('getPath')->willReturn($path);
+        $folder->method('getInternalPath')->willReturn($internalPath);
         $folder->method('getEtag')->willReturn('ef');
+        if ($owner !== '') {
+            $folder->method('getOwner')->willReturn($this->owner($owner));
+        }
+        $folder->expects($this->never())->method('getDirectoryListing');
+
+        return $folder;
+    }
+
+    /**
+     * Ada's `Specs/Old` (id 53), as Bob sees it through the share of `Specs`:
+     * its internal path is below the share, the file cache keeps Ada's.
+     */
+    private function oldFolderSeenByBob(): Folder
+    {
+        $this->specsFolder();
+        $this->events->cache(3, 'files/Specs/Old', 53, 'eo');
+        $this->userFolders['ada'] = $this->userFolder([53 => $this->folder(53, '/ada/files/Specs/Old', 'ada', [])]);
+        $folder = $this->createMock(Folder::class);
+        $folder->method('getType')->willReturn(FileInfo::TYPE_FOLDER);
+        $folder->method('getId')->willReturn(53);
+        $folder->method('getPath')->willReturn('/bob/files/Specs/Old');
+        $folder->method('getInternalPath')->willReturn('Old');
+        $folder->method('getEtag')->willReturn('eo');
         $folder->method('getOwner')->willReturn($this->owner('ada'));
         $folder->expects($this->never())->method('getDirectoryListing');
 
