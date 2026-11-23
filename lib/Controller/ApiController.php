@@ -270,7 +270,7 @@ class ApiController extends Controller
             $userFolder = $this->rootFolder->getUserFolder($this->requireUid());
             $content = $node->getContent();
             $filename = $node->getName();
-            $originalName = $userFolder->getRelativePath($node->getPath()) ?? $filename;
+            $originalName = ltrim((string) ($userFolder->getRelativePath($node->getPath()) ?? $filename), '/');
 
             // Key the knowledge entry on the ownCloud.online file id + etag and always
             // overwrite, so re-adding (or adding a changed) file updates its
@@ -491,7 +491,7 @@ class ApiController extends Controller
                 $node->getContent(),
                 '_owncloud_temp',
                 'extract',
-                $userFolder->getRelativePath($node->getPath()) ?? $node->getName(),
+                ltrim((string) ($userFolder->getRelativePath($node->getPath()) ?? $node->getName()), '/'),
             );
 
             $fileInfo = $uploadResult['files'][0] ?? null;

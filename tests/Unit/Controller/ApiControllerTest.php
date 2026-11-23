@@ -174,6 +174,28 @@ final class ApiControllerTest extends TestCase
         self::assertSame($sent, $upload[0]['body']['keep_synced'] ?? null);
     }
 
+    public function testSynaplanIsGivenAFilesPathAsSourceEventsGiveIt(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'link');
+        $this->keys()->setAppKey('api_key', 'sk_admin');
+        $this->config->setUserValue('ada', 'oco_synaplan', KeyStorage::USER_KEY, FakeCrypto::stored('sk_ada'));
+        $this->register();
+        $this->connect('ada');
+        $this->synaplanOffers(['bullet-points'], ['deliveries', 'pickups', 'read_scope', 'cloud_status', 'source_events']);
+        $this->root = $this->filesOfAda($this->file(7, 'plan.docx'));
+
+        $this->controller()->uploadToKnowledge(7, 'Contracts');
+        $this->controller()->summarize(7);
+
+        self::assertSame(
+            ['vectorize Projects/plan.docx', 'extract Projects/plan.docx'],
+            array_map(
+                static fn (array $call): string => ($call['body']['process_level'] ?? '') . ' ' . ($call['body']['original_name'] ?? ''),
+                $this->http->to('/api/v1/files/upload'),
+            ),
+        );
+    }
+
     /**
      * @param list<string> $types
      * @param list<string>|null $capabilities null while Synaplan has platform links off
@@ -208,6 +230,7 @@ final class ApiControllerTest extends TestCase
         $file->method('getId')->willReturn($id);
         $file->method('getName')->willReturn($name);
         $file->method('getPath')->willReturn('/ada/files/Projects/' . $name);
+        $file->method('getMimeType')->willReturn('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         $file->method('getSize')->willReturn(7);
         $file->method('getEtag')->willReturn('"e1"');
         $file->method('getContent')->willReturn('content');

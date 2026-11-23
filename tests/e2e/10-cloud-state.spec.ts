@@ -625,14 +625,14 @@ test.describe('the state of a file in Synaplan', () => {
       await withRecipient(browser, stamp, async (gus, theirs) => {
         await shareWith(UID, folder, gus)
         await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
-        const before = synaplanPathOf(instance, heldId)
+        expect(synaplanPathOf(instance, heldId), 'named as source events name it').toBe(`${folder}/Inner/${held}`)
 
         await withoutCron(async () => {
           await davMove(dav, UID, folder, renamed)
           runSourceEvents(UID)
           expect(stepsOf(gus), 'the share keeps its name in Gus’s files').toEqual([])
         })
-        expect(synaplanPathOf(instance, heldId), 'Gus’s copy keeps its path').toBe(before)
+        expect(synaplanPathOf(instance, heldId), 'Gus’s copy keeps its path').toBe(`${folder}/Inner/${held}`)
 
         await withoutCron(async () => {
           await davMove(dav, UID, `${renamed}/Inner`, `${renamed}/Archive`)
