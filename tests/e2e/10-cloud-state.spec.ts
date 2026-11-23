@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, test } from '@playwright/test'
+import { type APIRequestContext, type Browser, expect, test } from '@playwright/test'
 import {
   APP,
   connectFromSettings,
@@ -162,6 +162,53 @@ async function restore(dav: APIRequestContext, path: string): Promise<void> {
 /** The events of one kind about one file waiting in Ada's queue, oldest first. */
 function reportOf(fileId: string, event: string): QueuedEvent[] {
   return queuedEvents(UID).filter((queued) => queued.fileId === fileId && queued.event === event)
+}
+
+/**
+ * Run `act` as Gus, a person of this test only who connected a Synaplan
+ * account of his own: Synaplan applies an event to the copies of the person
+ * who reports it, so his copies follow only when the app reports the event
+ * for him too.
+ */
+async function withRecipient(
+  browser: Browser,
+  stamp: number,
+  act: (gus: string, theirs: APIRequestContext, theirDav: APIRequestContext) => Promise<void>,
+): Promise<void> {
+  const gus = `gus-${stamp.toString(36)}`
+  await createUser(gus, `${gus}@example.org`)
+  const context = await browser.newContext({ baseURL: OCO_URL })
+  try {
+    const page = await context.newPage()
+    await logIn(page, gus)
+    await connectFromSettings(page, SYNAPLAN_ADMIN)
+    const theirs = await ownCloudAs(gus)
+    const theirDav = await davAs(gus)
+    try {
+      await act(gus, theirs, theirDav)
+    } finally {
+      await theirDav.dispose()
+      await theirs.dispose()
+    }
+  } finally {
+    await deleteUser(gus)
+    await context.close()
+  }
+}
+
+/** Move or rename something in a person's files over WebDAV. */
+async function davMove(dav: APIRequestContext, uid: string, from: string, to: string): Promise<void> {
+  const root = `/remote.php/dav/files/${uid}`
+  const moved = await dav.fetch(`${root}/${from}`, {
+    method: 'MOVE',
+    headers: { Destination: `${OCO_URL}${root}/${to}` },
+  })
+  expect(moved.ok(), `${uid} moving ${from} to ${to}: HTTP ${moved.status()}`).toBe(true)
+}
+
+/** The steps waiting in a person's queue, as `step id path`, oldest first. */
+function stepsOf(uid: string): string[] {
+  return queuedEvents(uid).map((queued) => `${queued.step} ${queued.fileId} ${queued.path}`)
 }
 
 test.describe('the state of a file in Synaplan', () => {
@@ -456,22 +503,12 @@ test.describe('the state of a file in Synaplan', () => {
     browser,
   }) => {
     const stamp = Date.now()
-    // Gus connects a Synaplan account of his own: Synaplan applies an event
-    // to the copies of the person who reports it, so his copy follows only
-    // when the app reports the event for him too.
-    const gus = `gus-${stamp.toString(36)}`
-    await createUser(gus, `${gus}@example.org`)
-    const context = await browser.newContext({ baseURL: OCO_URL })
     const dav = await davAs(UID)
     const instance = await instanceId()
     const { folder, held, heldId } = await shelf(dav, stamp)
     try {
-      const page = await context.newPage()
-      await logIn(page, gus)
-      await connectFromSettings(page, SYNAPLAN_ADMIN)
-      await shareWith(UID, folder, gus)
-      const theirs = await ownCloudAs(gus)
-      try {
+      await withRecipient(browser, stamp, async (gus, theirs) => {
+        await shareWith(UID, folder, gus)
         await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
         const { synaplanFileId } = await detailOf(theirs, heldId)
         expect(synaplanFileId, 'Gus has a copy of his own').toBeTruthy()
@@ -504,12 +541,65 @@ test.describe('the state of a file in Synaplan', () => {
           synaplanFilesOf(instance, heldId).find((file) => file.id === synaplanFileId)?.deletedAt,
           'Gus’s copy left Synaplan',
         ).toBeGreaterThan(0)
-      } finally {
-        await theirs.dispose()
-      }
+      })
     } finally {
-      await deleteUser(gus)
-      await context.close()
+      await dav.delete(`${DAV}/${folder}`)
+      await dav.dispose()
+    }
+  })
+
+  test('the person a folder is shared with renames it or moves a folder inside it, and their copies follow', async ({
+    browser,
+  }) => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const instance = await instanceId()
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    try {
+      await withRecipient(browser, stamp, async (gus, theirs, theirDav) => {
+        await shareWith(UID, folder, gus)
+        await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
+        const folderId = await fileIdAt(dav, folder)
+        const renamed = `Theirs-${stamp}`
+
+        await withoutCron(async () => {
+          await davMove(theirDav, gus, folder, renamed)
+          expect(stepsOf(gus), 'a rename of the share is Gus’s alone').toEqual([
+            `send ${folderId} ${renamed}`,
+            `walk ${folderId} ${renamed}`,
+          ])
+          expect(stepsOf(UID), 'the folder keeps its name for Ada').toEqual([])
+          runSourceEvents(gus)
+        })
+        expect(synaplanPathOf(instance, heldId), 'Gus’s copy is at his new path').toBe(`${renamed}/${held}`)
+
+        const inner = await theirDav.fetch(`/remote.php/dav/files/${gus}/${renamed}/Inner`, { method: 'MKCOL' })
+        expect(inner.ok(), `making ${renamed}/Inner: HTTP ${inner.status()}`).toBe(true)
+        await withoutCron(async () => {
+          await davMove(theirDav, gus, `${renamed}/${held}`, `${renamed}/Inner/${held}`)
+          runSourceEvents(gus)
+          runSourceEvents(UID)
+        })
+        expect(synaplanPathOf(instance, heldId)).toBe(`${renamed}/Inner/${held}`)
+
+        const innerId = await fileIdAt(dav, `${folder}/Inner`)
+        await withoutCron(async () => {
+          await davMove(theirDav, gus, `${renamed}/Inner`, `${renamed}/Archive`)
+          expect(stepsOf(gus), 'the folder’s files come from its own place in Ada’s files').toEqual([
+            `share ${innerId} ${renamed}/Archive`,
+            `send ${innerId} ${renamed}/Archive`,
+            `walk ${innerId} ${renamed}/Archive`,
+          ])
+          expect(stepsOf(UID), 'the folder moved for Ada too').toEqual([
+            `send ${innerId} ${folder}/Archive`,
+            `walk ${innerId} ${folder}/Archive`,
+          ])
+          runSourceEvents(gus)
+          runSourceEvents(UID)
+        })
+        expect(synaplanPathOf(instance, heldId), 'Gus’s copy moved with the folder').toBe(`${renamed}/Archive/${held}`)
+      })
+    } finally {
       await dav.delete(`${DAV}/${folder}`)
       await dav.dispose()
     }

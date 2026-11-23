@@ -124,11 +124,12 @@ final class SourceEventListenerTest extends TestCase
 
     public function testASharedFolderTheRecipientRenamesIsWalkedFromItsOwnPath(): void
     {
-        $this->listener()->renamed($this->specsFolder('/bob/files/Specs 2026', '', ''));
+        $this->listener()->renamed($this->specsFolder('/bob/files/Specs 2026', '', 'ada'));
 
-        self::assertSame(['bob share 50', 'bob send 50', 'bob walk 50'], $this->events->steps());
-        self::assertSame('Specs 2026', array_values($this->events->rows)[2]['path']);
+        self::assertSame(['bob send 50', 'bob walk 50'], $this->events->steps(), 'the folder keeps its path for Ada and everyone else');
+        self::assertSame('Specs 2026', array_values($this->events->rows)[1]['path']);
         self::assertSame(0, $this->events->cacheReads);
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
     }
 
     public function testAFolderInsideAShareTheRecipientMovesIsWalkedFromItsOwnPath(): void

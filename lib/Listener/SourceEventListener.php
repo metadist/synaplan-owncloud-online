@@ -81,9 +81,15 @@ class SourceEventListener
 
     public function renamed(Node $target): void
     {
-        if (!$this->muted()) {
-            $this->report($target, $this->payload($target, 'moved', true), SourceEventQueue::now());
+        if ($this->muted()) {
+            return;
         }
+        $payload = $this->payload($target, 'moved', true);
+        $moverOnly = $payload !== null && self::isMountRoot($target);
+        if ($moverOnly) {
+            $payload['owner'] = '';
+        }
+        $this->report($target, $payload, SourceEventQueue::now(), [], $moverOnly);
     }
 
     /**
@@ -161,14 +167,15 @@ class SourceEventListener
      *
      * @param array{id: string, event: string, version: string, path: string, uid: string, owner: string}|null $payload
      * @param list<string> $released the people whose held rows of a deletion are ready now
+     * @param bool $moverOnly whether the event changed the paths of the person who acted only
      */
-    private function report(Node $node, ?array $payload, int $ord, array $released = []): void
+    private function report(Node $node, ?array $payload, int $ord, array $released = [], bool $moverOnly = false): void
     {
         if ($payload === null) {
             return;
         }
         $rows = $this->perPerson($payload);
-        if ($rows !== [] && $payload['event'] !== 'deleted') {
+        if ($rows !== [] && $payload['event'] !== 'deleted' && !$moverOnly) {
             $this->queue->add($rows[0]['uid'], $rows[0], $ord, SourceEventQueue::STEP_SHARE);
         }
         $people = [];
@@ -286,6 +293,19 @@ class SourceEventListener
             'uid' => preg_match('#^/([^/]+)/files/#', $node->getPath(), $match) === 1 ? $match[1] : '',
             'owner' => $owner,
         ];
+    }
+
+    /**
+     * The root of a mount, such as a share as its recipient sees it: moving
+     * it renames it for that person only.
+     */
+    private static function isMountRoot(Node $node): bool
+    {
+        try {
+            return $node->getInternalPath() === '';
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
