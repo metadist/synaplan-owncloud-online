@@ -90,7 +90,8 @@ All notable changes to this project are documented here. The format is based on
   folder's bird opens its eyes, a line over the open folder and the Synaplan
   tab pause, resume or stop the watch, and the Synaplan page lists every
   watched folder. Resuming a task asks about the files that arrived while
-  paused. An hourly check catches files a missed event left out, and the
+  paused. An hourly check catches files a missed event left out, going on
+  where it stopped when a large folder takes longer than one run, and the
   app's own copies are never sent back. Watching needs edit rights on the
   folder. Administrators can turn watching, or watching shared folders, off
   (on by default), and the admin screen warns when background jobs run with

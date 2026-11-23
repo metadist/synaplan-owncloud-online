@@ -78,6 +78,45 @@ final class WatchIndexQueueTest extends TestCase
         self::assertSame([], array_values(array_filter($updates[0], static fn (string $line): bool => str_starts_with($line, 'set since'))));
     }
 
+    public function testAPassCutShortIsContinuedAndAFinishedOneStartsOver(): void
+    {
+        $index = $this->index();
+        $index->continueAfter(5, 500);
+        self::assertSame(['update synaplan_watches', 'set reconcile_after=500', 'where watch_id=5'], $this->last());
+
+        $index->markReconciled(5, 200);
+        self::assertSame(['update synaplan_watches', 'set reconciled=200', 'set reconcile_after=0', 'where watch_id=5'], $this->last());
+    }
+
+    public function testAQueuedDeletionBecomesARestoreAsANewChange(): void
+    {
+        self::assertTrue($this->index()->replaceEvent(5, 30, 'deleted', 'restored', 200));
+
+        $statement = $this->last();
+        self::assertSame('update synaplan_watch_queue', $statement[0]);
+        self::assertContains('set event="restored"', $statement);
+        self::assertContains('set changed=200', $statement);
+        self::assertContains('set generation=' . json_encode($this->generations[0]), $statement);
+        self::assertContains('where event="deleted"', $statement);
+    }
+
+    public function testAWatchIsNotedAsHavingLostItsTargetAndAsRunningAgain(): void
+    {
+        $index = $this->index();
+        $index->markTarget(5, true);
+        self::assertSame(['update synaplan_watches', 'set state="attention"', 'set reason="target_gone"', 'where watch_id=5'], $this->last());
+
+        $index->markTarget(5, false);
+        self::assertSame(['update synaplan_watches', 'set state="active"', 'set reason=""', 'where watch_id=5'], $this->last());
+    }
+
+    public function testARetryOfAReplacedRowLeavesTheNewerChange(): void
+    {
+        $this->index()->retryLater(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => 100, 'generation' => 'g1', 'attempts' => 0], 160, 1);
+
+        self::assertContains('where generation="g1"', $this->last());
+    }
+
     private function index(): WatchIndex
     {
         $db = $this->createStub(IDBConnection::class);

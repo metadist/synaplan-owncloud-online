@@ -10,6 +10,7 @@ use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use OCA\oco_synaplan\Migrations\Version20261124000000;
 use OCA\oco_synaplan\Migrations\Version20261124010000;
+use OCA\oco_synaplan\Migrations\Version20261124020000;
 use PHPUnit\Framework\TestCase;
 
 final class WatchTablesTest extends TestCase
@@ -86,6 +87,29 @@ final class WatchTablesTest extends TestCase
         $schema = new Schema();
 
         (new Version20261124010000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        self::assertFalse($schema->hasTable('oc_synaplan_watches'));
+    }
+
+    public function testAWatchKeepsWhereACutShortPassStopped(): void
+    {
+        $schema = new Schema();
+        (new Version20261124000000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        (new Version20261124020000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+        (new Version20261124020000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        $after = $schema->getTable('oc_synaplan_watches')->getColumn('reconcile_after');
+        self::assertSame(Types::BIGINT, Type::lookupName($after->getType()));
+        self::assertFalse($after->getNotnull(), 'watches noted before it have none');
+        self::assertSame('0', (string) $after->getDefault());
+    }
+
+    public function testWithoutTheWatchesTableTheStopPointWaits(): void
+    {
+        $schema = new Schema();
+
+        (new Version20261124020000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
 
         self::assertFalse($schema->hasTable('oc_synaplan_watches'));
     }
