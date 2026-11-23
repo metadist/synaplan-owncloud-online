@@ -7,6 +7,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Support;
 use Doctrine\DBAL\Cache\ArrayResult;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Result;
+use OCA\OcoSynaplan\Service\CloudStateService;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\OAuthClient;
@@ -154,6 +155,18 @@ trait BuildsServices
             $this->accounts(),
             $this->logger(),
             $this->cache,
+        );
+    }
+
+    protected function cloudState(): CloudStateService
+    {
+        return $this->built['cloudState'] ??= new CloudStateService(
+            $this->http,
+            $this->synaplanConfig(),
+            $this->client(),
+            $this->links(),
+            $this->cache,
+            $this->logger(),
         );
     }
 

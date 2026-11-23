@@ -36,7 +36,7 @@ class PlatformLinkService
      * built here: Synaplan offers a feature to a person only when the app
      * says it has it.
      */
-    public const CAPABILITIES = ['deliveries', 'pickups', 'read_scope'];
+    public const CAPABILITIES = ['deliveries', 'pickups', 'read_scope', 'source_events'];
     private const REGISTRATION_STATUS = 'link_registration_status';
     /** A copy may be 100 MB; its one-time download path is valid this long. */
     private const DOWNLOAD_TIMEOUT = 300;
@@ -45,6 +45,8 @@ class PlatformLinkService
     /** As long as Synaplan lets its configuration be kept. */
     private const OFFERS_TTL = 300;
     private const OFFERS_RETRY_TTL = 60;
+    /** How long Synaplan's last answer stands in while it gives none. */
+    private const OFFERS_LAST_TTL = 86400;
     /** Synaplan no longer accepts this registration; its own statuses are pending and active. */
     public const STATUS_REFUSED = 'refused';
 
@@ -246,19 +248,46 @@ class PlatformLinkService
 
     /**
      * Whether this Synaplan reads folders: its configuration offers both
-     * folder reads and the read setting. With platform links off, or with no
-     * answer, it offers neither; no answer is asked again after a minute.
+     * folder reads and the read setting.
      */
     public function readsFolders(): bool
     {
+        $offers = $this->offers();
+
+        return in_array('pickups', $offers, true) && in_array('read_scope', $offers, true);
+    }
+
+    /**
+     * Whether this Synaplan tells which files it made searchable and how
+     * they are: the bird in Files and the Synaplan tab.
+     */
+    public function tellsFileState(): bool
+    {
+        return in_array('cloud_status', $this->offers(), true);
+    }
+
+    /** Whether this Synaplan wants to hear when its files change, move or go. */
+    public function followsChanges(): bool
+    {
+        return in_array('source_events', $this->offers(), true);
+    }
+
+    /**
+     * What this Synaplan offers clouds, as its configuration lists it. With
+     * platform links off it offers nothing. While Synaplan gives no answer,
+     * its last answer of the past day stands in, else it offers nothing, and
+     * it is asked again after a minute.
+     *
+     * @return list<string>
+     */
+    private function offers(): array
+    {
         $cache = $this->cacheFactory->create(Application::APP_ID);
-        $key = 'offered/' . md5($this->synaplanConfig->getBaseUrl());
-        $cached = $cache->get($key);
-        if ($cached === '1' || $cached === '0') {
-            return $cached === '1';
+        $key = 'offers/' . md5($this->synaplanConfig->getBaseUrl());
+        $kept = $this->keptOffers($cache->get($key));
+        if ($kept !== null) {
+            return $kept;
         }
-        $answered = false;
-        $offered = false;
         try {
             $configuration = $this->request(
                 'GET',
@@ -270,18 +299,34 @@ class PlatformLinkService
                 self::OFFERS_TIMEOUT,
             );
             $status = (int) ($configuration['status_code'] ?? 200);
-            $answered = $status === 200 || $status === 404;
-            $capabilities = $status === 200 && is_array($configuration['capabilities'] ?? null) ? $configuration['capabilities'] : [];
-            $offered = in_array('pickups', $capabilities, true) && in_array('read_scope', $capabilities, true);
+            if ($status === 200 || $status === 404) {
+                $capabilities = $status === 200 && is_array($configuration['capabilities'] ?? null) ? $configuration['capabilities'] : [];
+                $offers = array_values(array_filter($capabilities, 'is_string'));
+                $cache->set($key, (string) json_encode($offers), self::OFFERS_TTL);
+                $cache->set($key . '/last', (string) json_encode($offers), self::OFFERS_LAST_TTL);
+
+                return $offers;
+            }
         } catch (\Throwable $e) {
             $this->logger->warning('Synaplan\'s configuration could not be read: {message}', [
                 'app' => Application::APP_ID,
                 'message' => $e->getMessage(),
             ]);
         }
-        $cache->set($key, $offered ? '1' : '0', $answered ? self::OFFERS_TTL : self::OFFERS_RETRY_TTL);
+        $offers = $this->keptOffers($cache->get($key . '/last')) ?? [];
+        $cache->set($key, (string) json_encode($offers), self::OFFERS_RETRY_TTL);
 
-        return $offered;
+        return $offers;
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    private function keptOffers(mixed $cached): ?array
+    {
+        $kept = is_string($cached) ? json_decode($cached, true) : null;
+
+        return is_array($kept) ? array_values(array_filter($kept, 'is_string')) : null;
     }
 
     /**
@@ -594,6 +639,59 @@ class PlatformLinkService
         return [
             'id' => is_int($user['id'] ?? null) || is_string($user['id'] ?? null) ? $user['id'] : '',
             'email' => is_string($user['email'] ?? null) ? $user['email'] : '',
+        ];
+    }
+
+    /**
+     * Tell Synaplan, with the person's own credential, that files of theirs
+     * changed, moved, went to the trash or came back. Synaplan answers with
+     * the copies kept up to date that it wants again; a retry is asked for
+     * when it was not reached or is busy.
+     *
+     * @param list<array{id: string, event: string, version: string, path: string}> $events
+     * @return array{applied: int, ignored: int, reupload: list<array{external_id: string, id: string}>, retry?: true}
+     */
+    public function reportSourceEvents(array $events, string $uid): array
+    {
+        if ($events === [] || !$this->oauth->isRegistered() || !$this->canActFor($uid)) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+        }
+        try {
+            $decoded = $this->request(
+                'POST',
+                '/api/v1/platform-links/sources/events',
+                ['events' => $events],
+                ['Content-Type' => 'application/json'] + $this->personHeaders($uid),
+                true,
+                true,
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not tell Synaplan that files of {uid} changed: {message}', [
+                'app' => Application::APP_ID,
+                'uid' => $uid,
+                'message' => $e->getMessage(),
+            ]);
+
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => [], 'retry' => true];
+        }
+        $status = (int) ($decoded['status_code'] ?? 200);
+        if ($status === 429 || $status >= 500) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => [], 'retry' => true];
+        }
+        if ($status >= 400) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+        }
+        $reupload = [];
+        foreach (is_array($decoded['reupload'] ?? null) ? $decoded['reupload'] : [] as $item) {
+            if (is_array($item) && is_string($item['external_id'] ?? null) && is_string($item['id'] ?? null)) {
+                $reupload[] = ['external_id' => $item['external_id'], 'id' => $item['id']];
+            }
+        }
+
+        return [
+            'applied' => (int) ($decoded['applied'] ?? 0),
+            'ignored' => (int) ($decoded['ignored'] ?? 0),
+            'reupload' => $reupload,
         ];
     }
 

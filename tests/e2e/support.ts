@@ -14,8 +14,13 @@ export const PERSONAL_SETTINGS = '/index.php/settings/personal?sectionid=oco_syn
 export const ADMIN_SETTINGS = '/index.php/settings/admin?sectionid=oco_synaplan'
 
 /** Fixture accounts of the Synaplan test stack. */
-export const SYNAPLAN_ADMIN = { email: 'admin@synaplan.com', password: 'admin123' }
-export const SYNAPLAN_PERSON = { email: 'demo@synaplan.com', password: 'demo123' }
+export interface SynaplanAccount {
+  email: string
+  password: string
+}
+
+export const SYNAPLAN_ADMIN: SynaplanAccount = { email: 'admin@synaplan.com', password: 'admin123' }
+export const SYNAPLAN_PERSON: SynaplanAccount = { email: 'demo@synaplan.com', password: 'demo123' }
 
 /** The test people of docker/dev-entrypoint.sh; the admin password is `admin`. */
 export function passwordOf(uid: string): string {
@@ -79,7 +84,7 @@ export async function uploadReview(uid: string): Promise<void> {
 }
 
 /** An API client signed in to Synaplan. */
-export async function synaplanAs(account: { email: string; password: string }): Promise<APIRequestContext> {
+export async function synaplanAs(account: SynaplanAccount): Promise<APIRequestContext> {
   const context = await request.newContext({ baseURL: SYNAPLAN_URL })
   const response = await context.post('/api/v1/auth/login', { data: account })
   expect(response.ok(), `Synaplan login as ${account.email}`).toBe(true)
@@ -417,6 +422,97 @@ export function occ(...args: string[]): string {
   return run.stdout
 }
 
+/** The dev stack's container that runs the background jobs every minute (docker-compose.dev.yml). */
+const OCO_CRON_CONTAINER = process.env.OCO_CRON_CONTAINER ?? 'synaplan-owncloud-dev-cron'
+
+function docker(...args: string[]): void {
+  const run = spawnSync('docker', args, { encoding: 'utf8' })
+  if (run.status !== 0) {
+    const reason = (run.stderr || run.error?.message || '').trim()
+    throw new Error(`docker ${args.join(' ')} failed; set OCO_CRON_CONTAINER. ${reason}`)
+  }
+}
+
+/**
+ * Run `act` while the dev stack's cron waits, so a journey runs the app's
+ * background jobs one at a time and sees what each of them did.
+ */
+export async function withoutCron<T>(act: () => Promise<T>): Promise<T> {
+  docker('pause', OCO_CRON_CONTAINER)
+  try {
+    return await act()
+  } finally {
+    docker('unpause', OCO_CRON_CONTAINER)
+  }
+}
+
+/** A background job of the app, waiting in the queue, with its argument as occ shows it. */
+export interface QueuedJob {
+  id: string
+  argument: string
+}
+
+/** The app's queued background jobs of one kind, such as `SourceEventsJob`. */
+export function queuedJobs(kind: string): QueuedJob[] {
+  return occ('background:queue:status')
+    .split('\n')
+    .map((line) => line.split('|').map((cell) => cell.trim()))
+    .filter((cells) => cells[2] === `OCA\\OcoSynaplan\\BackgroundJob\\${kind}`)
+    .map((cells) => ({ id: cells[1], argument: cells[3] }))
+}
+
+/** Run one queued background job now, as cron would. */
+export function runJob(job: QueuedJob): void {
+  occ('background:queue:execute', '--accept-warning', '--force', job.id)
+}
+
+/** One Synaplan file made of an ownCloud.online file; `deletedAt` is 0 until Synaplan heard it went to the trash. */
+export interface SynaplanFileRow {
+  id: number
+  deletedAt: number
+}
+
+/**
+ * The Synaplan files made of one file of this ownCloud.online, from the
+ * test stack's database: Synaplan's API does not show when it heard a file
+ * went to the trash. Only rows of the instance this server registered as.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function synaplanFilesOf(instance: string, fileId: string): SynaplanFileRow[] {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  const rows = synaplanSql(
+    `SELECT CONCAT('rows:', COALESCE(GROUP_CONCAT(CONCAT(f.BID, '=', COALESCE(f.BSOURCEDELETEDAT, 0))
+      ORDER BY f.BID SEPARATOR ';'), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}'`,
+    /rows:(\S*)/,
+    `the Synaplan files of ${fileId}`,
+  )
+  return rows
+    .split(';')
+    .filter((pair) => pair !== '')
+    .map((pair) => {
+      const [id, deletedAt] = pair.split('=')
+      return { id: Number(id), deletedAt: Number(deletedAt) }
+    })
+}
+
+/** This ownCloud.online's instance id at Synaplan, from the admin settings. */
+export async function instanceId(): Promise<string> {
+  const admin = await ownCloudAs('admin')
+  try {
+    const settings = await admin.get(`${APP}/api/v1/settings`)
+    const { link_instance_id: instance } = (await settings.json()) as { link_instance_id?: string }
+    expect(instance, 'this ownCloud.online is registered with Synaplan').toBeTruthy()
+    return instance as string
+  } finally {
+    await admin.dispose()
+  }
+}
+
 /** Sign in on the ownCloud.online login page. */
 export async function logIn(page: Page, uid: string): Promise<void> {
   await page.goto('/index.php/login')
@@ -488,14 +584,14 @@ export async function activateAndSummarize(page: Page): Promise<Locator> {
 }
 
 /** Sign in on Synaplan's connect page and allow the link. */
-export async function allowOnSynaplan(page: Page): Promise<void> {
+export async function allowOnSynaplan(page: Page, account: SynaplanAccount = SYNAPLAN_PERSON): Promise<void> {
   await page.waitForURL(`${SYNAPLAN_URL}/**`)
   const email = page.getByTestId('input-email')
   const connect = page.getByTestId('btn-connect')
   await expect(email.or(connect)).toBeVisible()
   if (await email.isVisible()) {
-    await email.fill(SYNAPLAN_PERSON.email)
-    await page.getByTestId('input-password').fill(SYNAPLAN_PERSON.password)
+    await email.fill(account.email)
+    await page.getByTestId('input-password').fill(account.password)
     await page.getByTestId('btn-login').click()
   }
   await expect(connect).toBeVisible()
@@ -510,12 +606,12 @@ export function personalSection(page: Page): Locator {
   return page.locator('#synaplan-personal-settings')
 }
 
-/** Connect from the personal settings, as a person would. */
-export async function connectFromSettings(page: Page): Promise<void> {
+/** Connect from the personal settings, as a person would, to the Synaplan person's account unless told another. */
+export async function connectFromSettings(page: Page, account: SynaplanAccount = SYNAPLAN_PERSON): Promise<void> {
   await page.goto(PERSONAL_SETTINGS)
   await personalSection(page).getByRole('button', { name: 'Connect Synaplan' }).click()
-  await allowOnSynaplan(page)
-  await expect(personalSection(page).getByText(CONNECTED)).toBeVisible()
+  await allowOnSynaplan(page, account)
+  await expect(personalSection(page).getByText(`Connected as ${account.email}`)).toBeVisible()
 }
 
 /** Connect unless the personal settings already say "Connected as …". */

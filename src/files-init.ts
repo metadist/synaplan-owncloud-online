@@ -10,20 +10,21 @@
  * folders; the Files list shows an action registered later as well.
  *
  * New → From Synaplan… is a plugin of the Files app's New menu: it copies the
- * person's Synaplan files into the folder that is open.
+ * person's Synaplan files into the folder that is open. The bird beside the
+ * files Synaplan holds, and the Synaplan tab of the details view, come from a
+ * plugin of the file lists (see cloud_state/fileList.ts).
  */
-import type { Component } from 'vue'
+import { registerCloudState } from './cloud_state/fileList'
 import ChatPanel from './components/ChatPanel.vue'
-import ConsentCard from './components/ConsentCard.vue'
 import FromSynaplanModal from './components/FromSynaplanModal.vue'
 import KnowledgeModal from './components/KnowledgeModal.vue'
 import SummaryModal from './components/SummaryModal.vue'
 import TranslateModal from './components/TranslateModal.vue'
 import { api } from './shared/api'
-import { isBlocked, loadConsent } from './shared/consent'
 import { failureFromError } from './shared/failures'
+import { loadFeatures } from './shared/features'
+import { openGuarded } from './shared/guarded'
 import { CHAT_MIMES, SEARCHABLE_MIMES, SUMMARIZE_MIMES, TRANSLATE_MIMES } from './shared/mimes'
-import { openModal } from './shared/mount'
 import { APP_ID, ApiError, translate as t } from './shared/oc'
 
 type FileContext = {
@@ -46,22 +47,6 @@ function resolveFileId(fileName: string, context: FileContext): number | null {
   }
   const fromRow = context.$file?.data ? context.$file.data('id') : undefined
   return fromRow ? Number(fromRow) : null
-}
-
-/** Open a modal, or the consent card first while the person has not agreed. */
-async function openGuarded(component: Component, props: Record<string, unknown>): Promise<void> {
-  const state = await loadConsent()
-  if (!state || !isBlocked(state)) {
-    openModal(component, props)
-    return
-  }
-  const gate = openModal(ConsentCard, {
-    state,
-    onGranted: () => {
-      gate.close()
-      openModal(component, props)
-    },
-  })
 }
 
 /** A folder's path in the person's files, from the row's name and the folder that holds it. */
@@ -146,27 +131,24 @@ function register(): void {
     open: (fileId, fileName) => void openGuarded(ChatPanel, { fileId, fileName, compact: true }),
   })
 
-  void api.features().then(
-    (features) => {
-      if (features.translation) {
-        add({
-          name: 'synaplanTranslate',
-          label: t('Translate with Synaplan'),
-          mimes: TRANSLATE_MIMES,
-          open: (fileId, fileName) => void openGuarded(TranslateModal, { fileId, fileName }),
-        })
-      }
-      if (features.read_folders) {
-        add({
-          name: 'synaplanReadFolder',
-          label: t('Let Synaplan read this folder'),
-          mimes: ['dir'],
-          open: (fileId, fileName, dir) => void allowFolder(fileId, folderPath(dir, fileName)),
-        })
-      }
-    },
-    () => undefined,
-  )
+  void loadFeatures().then((features) => {
+    if (features.translation) {
+      add({
+        name: 'synaplanTranslate',
+        label: t('Translate with Synaplan'),
+        mimes: TRANSLATE_MIMES,
+        open: (fileId, fileName) => void openGuarded(TranslateModal, { fileId, fileName }),
+      })
+    }
+    if (features.read_folders) {
+      add({
+        name: 'synaplanReadFolder',
+        label: t('Let Synaplan read this folder'),
+        mimes: ['dir'],
+        open: (fileId, fileName, dir) => void allowFolder(fileId, folderPath(dir, fileName)),
+      })
+    }
+  })
 }
 
 export const FROM_SYNAPLAN_ENTRY = 'synaplan-from-synaplan'
@@ -222,6 +204,7 @@ function registerFromSynaplan(): void {
 }
 
 registerFromSynaplan()
+registerCloudState()
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', register)

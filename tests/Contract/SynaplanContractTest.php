@@ -41,8 +41,8 @@ final class SynaplanContractTest extends TestCase
     /**
      * Calls made with a person's credential that contract v1 (the vendored
      * paths.json) does not list yet. All answer on the pinned Synaplan; the
-     * files, delivery, pickup and read-scope routes with the `files` scope
-     * (ApiKeyScope).
+     * files, delivery, pickup, read-scope and source-event routes with the
+     * `files` scope (ApiKeyScope).
      */
     private const OUTSIDE_THE_CONTRACT = [
         'DELETE /api/v1/apikeys/{id}',
@@ -56,6 +56,7 @@ final class SynaplanContractTest extends TestCase
         'POST /api/v1/platform-links/pickups/{id}/files',
         'POST /api/v1/platform-links/pickups/{id}/listing',
         'POST /api/v1/platform-links/pickups/{id}/result',
+        'POST /api/v1/platform-links/sources/events',
         'PUT /api/v1/platform-links/read-scope',
     ];
 
@@ -286,6 +287,8 @@ final class SynaplanContractTest extends TestCase
             fn () => $client->knowledgeStatus(7, 'etag-1'),
             fn () => $client->deleteKnowledgeFile(42),
             fn () => $client->uploadFile('report.pdf', '%PDF', 'Contracts', 'vectorize', '/Projects/report.pdf', '7', 'etag-1', true),
+            fn () => $client->uploadFile('report.pdf', '%PDF', 'Contracts', 'vectorize', 'Projects/report.pdf', '7', 'etag-2', true, 'sk_ada', false),
+            fn () => $client->listRecentFiles(1, SynaplanClient::SOURCE, '', 100),
             fn () => $client->generateMedia('A cat', 'image', 3),
             fn () => $client->downloadFile('/api/v1/files/uploads/7/cat.png'),
             fn () => (new LibraryImport($client, $this->createStub(IRootFolder::class), $this->logger()))->list(2, 'generated', 'plan'),
@@ -318,6 +321,13 @@ final class SynaplanContractTest extends TestCase
             ]),
             fn () => $links->reportPickupResult('16', 'ada', ['status' => 'failed', 'error_code' => 'outside_scope']),
             fn () => $links->reportReadScope('ada', 'allowed', [['id' => '3', 'path' => 'Invoices']]),
+            fn () => $this->cloudState()->status([['id' => '7', 'version' => 'etag-1'], ['id' => '8', 'version' => '']]),
+            fn () => $this->cloudState()->detail(42),
+            fn () => $this->cloudState()->glyphOverrides(),
+            fn () => $links->reportSourceEvents([
+                ['id' => '7', 'event' => 'changed', 'version' => 'etag-2', 'path' => 'Projects/report.pdf'],
+                ['id' => '8', 'event' => 'moved', 'version' => 'etag-3', 'path' => ''],
+            ], 'ada'),
             fn () => $accounts->fetchUsage(7),
             fn () => $accounts->adoptLegacyAccount('ada'),
             fn () => $accounts->renewProvisionedKey(),

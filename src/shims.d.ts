@@ -39,6 +39,17 @@ interface OcNewFileMenu {
   delegateEvents: () => unknown
 }
 
+/** The jQuery set a file list hands its plugins; only what the app uses. */
+interface OcRows {
+  on: (event: string, handler: (event: { $files?: ArrayLike<unknown> }) => void) => unknown
+  children: (selector: string) => { toArray: () => HTMLElement[] }
+}
+
+/** The base of the details view's tabs (apps/files/js/detailtabview.js), a Backbone view. */
+interface OcDetailTabView {
+  extend: (properties: Record<string, unknown>) => new (id: string) => unknown
+}
+
 interface OcGlobal {
   requestToken: string
   generateUrl: (path: string, params?: Record<string, unknown>) => string
@@ -51,7 +62,8 @@ interface OcGlobal {
     show: (text: string) => unknown
   }
   Plugins?: {
-    register: (target: string, plugin: { attach: (instance: OcNewFileMenu) => void }) => void
+    register(target: 'OCA.Files.NewFileMenu', plugin: { attach: (instance: OcNewFileMenu) => void }): void
+    register(target: 'OCA.Files.FileList', plugin: { attach: (instance: OcFileList) => void }): void
   }
   Util?: {
     relativeModifiedDate?: (timestamp: number) => string
@@ -74,7 +86,9 @@ interface OcaGlobal {
     fileActions?: {
       registerAction: (action: OcFileAction) => void
     }
+    DetailTabView?: OcDetailTabView
     App?: {
+      fileList?: OcFileList
       currentFileList?: {
         getModelForFile?: (name: string) => { id?: number }
       }
@@ -83,6 +97,19 @@ interface OcaGlobal {
 }
 
 declare global {
+  /** A list of the Files app (apps/files/js/filelist.js), as its plugins see it. */
+  interface OcFileList {
+    id?: string
+    $fileList?: OcRows
+    showDetailsView?: (fileName: string, tabId?: string) => void
+    registerTabView?: (tabView: unknown) => void
+  }
+
+  /** A file's details in the Files app's details view (OCA.Files.FileInfoModel). */
+  interface OcFileInfoModel {
+    get: (key: string) => unknown
+  }
+
   const OC: OcGlobal
   const OCA: OcaGlobal
   // ownCloud.online translation helper. Falls back to identity when absent.

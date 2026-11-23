@@ -85,7 +85,7 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(1, $put);
         self::assertSame('https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound', $put[0]['body']['delivery_url']);
-        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[0]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events'], $put[0]['body']['app_capabilities']);
         self::assertSame(
             'https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound',
             $this->controller()->getSettings()->getData()['delivery_url'],
@@ -115,7 +115,7 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(2, $put);
         self::assertArrayNotHasKey('delivery_url', $put[1]['body']);
-        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[1]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events'], $put[1]['body']['app_capabilities']);
     }
 
     public function testRegisteringReadsTheNotificationKeys(): void

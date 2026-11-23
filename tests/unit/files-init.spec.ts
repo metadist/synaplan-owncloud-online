@@ -4,6 +4,7 @@ const { openModal } = vi.hoisted(() => ({ openModal: vi.fn() }))
 
 vi.mock('../../src/components/ChatPanel.vue', () => ({ default: {} }))
 vi.mock('../../src/components/ConsentCard.vue', () => ({ default: {} }))
+vi.mock('../../src/components/FilesSidebarTab.vue', () => ({ default: {} }))
 vi.mock('../../src/components/FromSynaplanModal.vue', () => ({ default: { name: 'FromSynaplanModal' } }))
 vi.mock('../../src/components/KnowledgeModal.vue', () => ({ default: {} }))
 vi.mock('../../src/components/SummaryModal.vue', () => ({ default: {} }))

@@ -320,6 +320,128 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertTrue($this->links()->readsFolders(), 'asked again once the answer is gone');
     }
 
+    public function testWhileSynaplanGivesNoAnswerItsLastAnswerStandsInAndItIsAskedAgainSoon(): void
+    {
+        $this->http->answer(static fn (): array => [
+            'issuer' => self::SYNAPLAN,
+            'capabilities' => ['deliveries', 'pickups', 'read_scope', 'cloud_status', 'source_events'],
+        ]);
+        self::assertTrue($this->links()->tellsFileState());
+        $last = array_filter($this->cache->ttls, static fn (string $key): bool => str_ends_with($key, '/last'), ARRAY_FILTER_USE_KEY);
+        self::assertSame([86400], array_values($last), 'kept a day for an outage');
+
+        foreach ([
+            'down' => static fn (): IResponse => RecordingHttp::response(503, ''),
+            'unreachable' => static fn (): \Throwable => new \RuntimeException('cURL error 7: Failed to connect'),
+        ] as $case => $responder) {
+            $this->expireTheAnswer();
+            $this->http->answer($responder);
+
+            self::assertTrue($this->links()->tellsFileState(), $case);
+            self::assertTrue($this->links()->followsChanges(), $case);
+            self::assertTrue($this->links()->readsFolders(), $case);
+            self::assertSame([60], $this->keptFor(), $case);
+        }
+
+        $this->expireTheAnswer();
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(404, '{"error":"not_found"}'));
+        self::assertFalse($this->links()->tellsFileState(), 'platform links turned off');
+
+        $this->expireTheAnswer();
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(503, ''));
+        self::assertFalse($this->links()->tellsFileState(), 'the last answer offered nothing');
+        self::assertFalse($this->links()->readsFolders(), 'the last answer offered nothing');
+    }
+
+    /**
+     * @return array<string, array{0: list<string>, 1: bool, 2: bool}>
+     */
+    public static function cloudFileOffers(): array
+    {
+        return [
+            'cloud files on' => [['deliveries', 'pickups', 'read_scope', 'cloud_status', 'source_events', 'watches'], true, true],
+            'states without changes' => [['deliveries', 'cloud_status'], true, false],
+            'cloud files off' => [['deliveries', 'pickups', 'read_scope'], false, false],
+        ];
+    }
+
+    /**
+     * @param list<string> $capabilities
+     */
+    #[DataProvider('cloudFileOffers')]
+    public function testFileStatesAndChangesAreOnlyToldWhereSynaplanOffersThem(array $capabilities, bool $states, bool $changes): void
+    {
+        $this->http->answer(static fn (): array => ['issuer' => self::SYNAPLAN, 'capabilities' => $capabilities]);
+
+        self::assertSame($states, $this->links()->tellsFileState());
+        self::assertSame($changes, $this->links()->followsChanges());
+        $this->links()->readsFolders();
+        self::assertCount(1, $this->http->to('/.well-known/synaplan-configuration'), 'one configuration answers every question');
+    }
+
+    public function testChangedFilesAreReportedWithThePersonsOwnCredential(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada');
+        $this->http->answer(static fn (): array => [
+            'applied' => 1,
+            'ignored' => 1,
+            'reupload' => [['external_id' => 'ada', 'id' => '7'], ['external_id' => 5, 'id' => '8'], 'bob'],
+        ]);
+        $events = [
+            ['id' => '7', 'event' => 'changed', 'version' => '"e2"', 'path' => 'Projects/plan.docx'],
+            ['id' => '9', 'event' => 'deleted', 'version' => '"e3"', 'path' => 'old.txt'],
+        ];
+
+        $answer = $this->links()->reportSourceEvents($events, 'ada');
+
+        self::assertSame(['applied' => 1, 'ignored' => 1, 'reupload' => [['external_id' => 'ada', 'id' => '7']]], $answer);
+        $call = $this->http->to('/api/v1/platform-links/sources/events')[0];
+        self::assertSame('POST', $call['method']);
+        self::assertSame(['events' => $events], $call['body']);
+        self::assertSame('Bearer access-ada', $call['options']['headers']['Authorization']);
+        self::assertSame('application/json', $call['options']['headers']['Content-Type']);
+    }
+
+    /**
+     * @return array<string, array{0: IResponse|\Throwable, 1: bool}>
+     */
+    public static function eventAnswers(): array
+    {
+        return [
+            'busy' => [RecordingHttp::response(429, '{"error":"rate_limited"}'), true],
+            'down' => [RecordingHttp::response(503, ''), true],
+            'unreachable' => [new \RuntimeException('cURL error 28: Operation timed out'), true],
+            'refused' => [RecordingHttp::response(400, '{"error":"invalid_events"}'), false],
+            'not this person\'s' => [RecordingHttp::response(403, '{"error":"forbidden"}'), false],
+        ];
+    }
+
+    #[DataProvider('eventAnswers')]
+    public function testOnlyASynaplanThatWasBusyOrNotReachedIsAskedAgain(IResponse|\Throwable $answer, bool $retry): void
+    {
+        $this->register();
+        $this->connect('ada');
+        $this->http->answer(static fn (): IResponse|\Throwable => $answer);
+
+        $result = $this->links()->reportSourceEvents([['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']], 'ada');
+
+        self::assertSame([], $result['reupload']);
+        self::assertSame($retry, $result['retry'] ?? false);
+    }
+
+    public function testNoChangeIsReportedWithoutARegistrationOrThePersonsCredential(): void
+    {
+        $event = [['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']];
+        $nothing = ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+
+        self::assertSame($nothing, $this->links()->reportSourceEvents($event, 'ada'));
+        $this->register();
+        self::assertSame($nothing, $this->links()->reportSourceEvents($event, 'ada'));
+        self::assertSame($nothing, $this->links()->reportSourceEvents([], 'ada'));
+        self::assertSame([], $this->http->calls);
+    }
+
     public function testLeavingSynaplanEndsTheRegistrationThereAndForgetsTheKeyHere(): void
     {
         $this->register();
@@ -333,10 +455,24 @@ final class PlatformLinkServiceTest extends TestCase
     }
 
     /**
-     * @return list<int> how long each cached answer is kept
+     * @return list<int> how long each cached answer is kept, apart from the last answer kept for an outage
      */
     private function keptFor(): array
     {
-        return array_values($this->cache->ttls);
+        return array_values(array_filter(
+            $this->cache->ttls,
+            static fn (string $key): bool => !str_ends_with($key, '/last'),
+            ARRAY_FILTER_USE_KEY,
+        ));
+    }
+
+    /** Let the answer Synaplan allows to be kept run out, as five minutes would. */
+    private function expireTheAnswer(): void
+    {
+        foreach (array_keys($this->cache->values) as $key) {
+            if (!str_ends_with($key, '/last')) {
+                unset($this->cache->values[$key], $this->cache->ttls[$key]);
+            }
+        }
     }
 }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { invalidateCloudStatusCache } from '../cloud_state/statusBatcher'
 import { api, type FileGroup } from '../shared/api'
 import { describeFailure, failureFromError, type Failure } from '../shared/failures'
+import { loadFeatures } from '../shared/features'
 import { APP_NAME, translate as t } from '../shared/oc'
 import FailureNote from './FailureNote.vue'
 
@@ -21,16 +23,23 @@ const searchable = ref(false)
 const stale = ref(false)
 const removed = ref(false)
 const done = ref<null | { passages: number; updated: boolean; folder: string }>(null)
+const followsChanges = ref(false)
+const keepSynced = ref(true)
 
 const folderName = computed(() => folder.value.trim() || 'DEFAULT')
 
 onMounted(async () => {
   loading.value = true
   try {
-    const [g, status] = await Promise.all([api.getGroups(), api.knowledgeStatus(props.fileId)])
+    const [g, status, features] = await Promise.all([
+      api.getGroups(),
+      api.knowledgeStatus(props.fileId),
+      loadFeatures(),
+    ])
     groups.value = g.groups || []
     searchable.value = status.inKnowledge
     stale.value = status.stale
+    followsChanges.value = features.follows_changes
   } catch (e) {
     failure.value = failureFromError(e)
   } finally {
@@ -42,7 +51,12 @@ async function makeSearchable(): Promise<void> {
   busy.value = true
   failure.value = null
   try {
-    const res = await api.uploadToKnowledge(props.fileId, folderName.value)
+    const res = await api.uploadToKnowledge(
+      props.fileId,
+      folderName.value,
+      followsChanges.value ? keepSynced.value : undefined,
+    )
+    invalidateCloudStatusCache()
     if (!res.success || res.chunksCreated === 0) {
       failure.value =
         res.chunksCreated === 0 && res.success
@@ -68,6 +82,7 @@ async function remove(): Promise<void> {
   try {
     await api.removeFromKnowledge(props.fileId)
     removed.value = true
+    invalidateCloudStatusCache()
   } catch (e) {
     failure.value = failureFromError(e)
   } finally {
@@ -146,6 +161,14 @@ async function remove(): Promise<void> {
         </datalist>
       </div>
 
+      <div v-if="followsChanges" class="synaplan-keep">
+        <label>
+          <input v-model="keepSynced" type="checkbox" data-testid="synaplan-keep-synced" :disabled="busy" />
+          {{ t('Keep it up to date') }}
+        </label>
+        <p class="oco-sub">{{ t('If you delete the file here, Synaplan forgets it too.') }}</p>
+      </div>
+
       <FailureNote :failure="failure" />
 
       <div class="oco-actions">
@@ -160,3 +183,19 @@ async function remove(): Promise<void> {
     </template>
   </div>
 </template>
+
+<style>
+.synaplan-keep {
+  margin: 0 0 14px 162px;
+}
+.synaplan-keep label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.synaplan-keep .oco-sub {
+  margin: 4px 0 0;
+}
+</style>

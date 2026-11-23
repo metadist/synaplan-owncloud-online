@@ -33,6 +33,11 @@ return [
         ['name' => 'api#getGroups', 'url' => '/api/v1/knowledge/groups', 'verb' => 'GET'],
         ['name' => 'api#getModels', 'url' => '/api/v1/knowledge/models', 'verb' => 'GET'],
 
+        // What Synaplan made of the person's files: the bird, the Synaplan tab, the searchable list
+        ['name' => 'cloudStatus#status', 'url' => '/api/v1/cloud/status', 'verb' => 'POST'],
+        ['name' => 'cloudStatus#detail', 'url' => '/api/v1/cloud/files/{fileId}', 'verb' => 'GET'],
+        ['name' => 'cloudStatus#searchable', 'url' => '/api/v1/cloud/searchable', 'verb' => 'GET'],
+
         // Client runtime config (language + memory availability) for the chat UI
         ['name' => 'api#clientConfig', 'url' => '/api/v1/client-config', 'verb' => 'GET'],
         // What the Files app offers, by what the connected Synaplan supports

@@ -150,10 +150,81 @@ export interface AiUser {
   kind: 'linked' | 'provisioned' | null
 }
 
+/** What the connected Synaplan offers this page; the Files app shows only these. */
+export interface Features {
+  translation: boolean
+  read_folders: boolean
+  /** Synaplan tells what it made of each of the person's files: the bird, the Synaplan tab. */
+  file_state: boolean
+  /** Synaplan hears about changed, moved, deleted and restored files: "Keep it up to date". */
+  follows_changes: boolean
+}
+
+export type CloudFileStateCode = 'searchable' | 'adding' | 'updating' | 'changed' | 'failed' | 'none'
+
+/** Image addresses Synaplan's administrator set instead of the bird. */
+export interface GlyphOverrides {
+  bird?: string | null
+  bird_eyes?: string | null
+}
+
+/** What Synaplan made of one file of a folder view. */
+export interface CloudStatusItem {
+  id: string
+  state: CloudFileStateCode
+  knowledge_folder?: { key: string; name: string } | null
+  file_id?: number | null
+  kept_up_to_date?: boolean
+}
+
+export interface CloudStatusAnswer {
+  success: boolean
+  enabled: boolean
+  unreachable?: boolean
+  items: CloudStatusItem[]
+  glyphs?: GlyphOverrides
+  openSynaplanUrl?: string
+}
+
+/** One file of the person for the Synaplan tab. */
+export interface CloudFileDetail {
+  success: boolean
+  enabled: boolean
+  unreachable?: boolean
+  kind?: 'file' | 'folder'
+  fileId?: number
+  name?: string
+  modified?: number
+  state?: CloudFileStateCode
+  knowledgeFolder?: string | null
+  keptUpToDate?: boolean
+  synaplanFileId?: number | null
+  glyphs?: GlyphOverrides
+  openSynaplanUrl?: string
+}
+
+/** A file from here that Synaplan holds as searchable, for the list on the app page. */
+export interface SearchableFile {
+  id: number
+  fileId: number
+  name: string
+  path: string
+  knowledgeFolder: string
+  openUrl: string
+}
+
 export const api = {
   getClientConfig: () => apiFetch<ClientConfig>('/api/v1/client-config'),
 
-  features: () => apiFetch<{ translation: boolean; read_folders: boolean }>('/api/v1/features'),
+  features: () => apiFetch<Partial<Features>>('/api/v1/features'),
+
+  cloudStatus: (items: { id: string; version: string }[]) =>
+    apiFetch<CloudStatusAnswer>('/api/v1/cloud/status', { method: 'POST', body: { items } }),
+
+  cloudFile: (fileId: number) => apiFetch<CloudFileDetail>('/api/v1/cloud/files/' + fileId),
+
+  searchableFiles: () =>
+    apiFetch<{ success: boolean; files: SearchableFile[]; openSynaplanUrl?: string }>('/api/v1/cloud/searchable'),
 
   getGroups: () => apiFetch<{ success: boolean; groups: FileGroup[] }>('/api/v1/knowledge/groups'),
 
@@ -176,7 +247,8 @@ export const api = {
       '/api/v1/knowledge/status/' + fileId,
     ),
 
-  uploadToKnowledge: (fileId: number, groupKey: string) =>
+  /** `keepSynced` is left out where Synaplan does not hear about changes. */
+  uploadToKnowledge: (fileId: number, groupKey: string, keepSynced?: boolean) =>
     apiFetch<{
       success: boolean
       filename: string
@@ -185,7 +257,10 @@ export const api = {
       vectorized: boolean
       overwritten: boolean
       error?: string | null
-    }>('/api/v1/knowledge/upload/' + fileId, { method: 'POST', body: { groupKey } }),
+    }>('/api/v1/knowledge/upload/' + fileId, {
+      method: 'POST',
+      body: keepSynced === undefined ? { groupKey } : { groupKey, keepSynced },
+    }),
 
   removeFromKnowledge: (fileId: number) =>
     apiFetch<{ success: boolean; removed: boolean }>('/api/v1/knowledge/' + fileId, { method: 'DELETE' }),

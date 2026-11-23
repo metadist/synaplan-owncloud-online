@@ -355,6 +355,8 @@ class SynaplanClient
      *                                  (source, source_id) instead of creating a duplicate.
      * @param string|null $apiKey       A person's credential for work done while they are
      *                                  not signed in; null uses the current request's.
+     * @param bool|null   $keepSynced   Whether Synaplan asks for the file again when it
+     *                                  changes here; null leaves Synaplan's choice.
      * @return array<string, mixed>
      * @throws \Exception on API error
      */
@@ -368,6 +370,7 @@ class SynaplanClient
         ?string $sourceEtag = null,
         bool $overwrite = false,
         ?string $apiKey = null,
+        ?bool $keepSynced = null,
     ): array {
         $client = $this->clientService->newClient();
         $url = $this->getBaseUrl() . '/api/v1/files/upload';
@@ -404,6 +407,9 @@ class SynaplanClient
         }
         if ($overwrite) {
             $multipart[] = ['name' => 'overwrite', 'contents' => '1'];
+        }
+        if ($keepSynced !== null) {
+            $multipart[] = ['name' => 'keep_synced', 'contents' => $keepSynced ? '1' : '0'];
         }
 
         $options = [
@@ -503,17 +509,22 @@ class SynaplanClient
     }
 
     /**
-     * One page of the person's files in Synaplan, newest first.
+     * One page of the person's files in Synaplan, newest first: at most 100,
+     * of one source (`generated`, `owncloud`) when it is named.
      *
-     * @param array<string, scalar> $filters `source` (`generated`) and `search`
      * @return array<string, mixed>
      */
-    public function listRecentFiles(int $page = 1, array $filters = []): array
+    public function listRecentFiles(int $page = 1, string $source = '', string $search = '', int $limit = 50): array
     {
-        return $this->request('GET', '/api/v1/files', null, true, [
-            'page' => max(1, $page),
-            'limit' => 50,
-        ] + $filters);
+        $query = ['page' => max(1, $page), 'limit' => max(1, min(100, $limit))];
+        if ($source !== '') {
+            $query['source'] = $source;
+        }
+        if (trim($search) !== '') {
+            $query['search'] = trim($search);
+        }
+
+        return $this->request('GET', '/api/v1/files', null, true, $query);
     }
 
     /**

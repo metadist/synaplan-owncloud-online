@@ -12,6 +12,7 @@ import {
   ownedAccountIds,
   saveSettings,
   setUserEnabled,
+  SYNAPLAN_ADMIN,
   SYNAPLAN_PERSON,
   synaplanAs,
   uploadReview,
@@ -49,11 +50,15 @@ test('when the administrator deletes a connected person, their link ends and the
   page,
 }) => {
   const person = newcomer('erin')
+  // Erin connects a Synaplan account of her own, not Ada's. Synaplan keeps an
+  // ended link here and names the oldest account its person has here for
+  // re-uploading a file, ended ones too, so Ada's files would go to Erin.
+  const account = SYNAPLAN_ADMIN
   await createUser(person.uid, person.email)
   try {
     await logIn(page, person.uid)
-    await connectFromSettings(page)
-    const synaplan = await synaplanAs(SYNAPLAN_PERSON)
+    await connectFromSettings(page, account)
+    const synaplan = await synaplanAs(account)
     expect(await linksOf(synaplan, person.uid)).toHaveLength(1)
 
     await deleteUser(person.uid)
@@ -64,7 +69,7 @@ test('when the administrator deletes a connected person, their link ends and the
     await deleteUser(person.uid)
   }
 
-  const stillSignsIn = await synaplanAs(SYNAPLAN_PERSON)
+  const stillSignsIn = await synaplanAs(account)
   await stillSignsIn.dispose()
 })
 

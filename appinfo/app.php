@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Listener\ReadScopeListener;
+use OCA\OcoSynaplan\Listener\SourceEventListener;
 use OCA\OcoSynaplan\Listener\UserDeletedListener;
 use OCA\OcoSynaplan\Listener\UserEnabledListener;
 use OCA\OcoSynaplan\Notification\CopyNotifier;
@@ -62,13 +63,38 @@ if ($signedIn !== null) {
 });
 // A folder Synaplan may read keeps that permission when it moves; Synaplan
 // hears its new path.
-\OC::$server->getRootFolder()->listen('\OC\Files', 'postRename', function ($source, $target) use ($container) {
+$root = \OC::$server->getRootFolder();
+$root->listen('\OC\Files', 'postRename', function ($source, $target) use ($container) {
     if ($target instanceof Node) {
         /** @var ReadScopeListener $listener */
         $listener = $container->query(ReadScopeListener::class);
         $listener->handle($target);
     }
 });
+// Synaplan hears when a file it keeps a copy of changes, moves, goes to the
+// trash or comes back. One listener sees a delete before and after.
+$sourceEvents = static fn (): SourceEventListener => $container->query(SourceEventListener::class);
+$root->listen('\OC\Files', 'postWrite', function ($node) use ($sourceEvents) {
+    if ($node instanceof Node) {
+        $sourceEvents()->written($node);
+    }
+});
+$root->listen('\OC\Files', 'postRename', function ($source, $target) use ($sourceEvents) {
+    if ($target instanceof Node) {
+        $sourceEvents()->renamed($target);
+    }
+});
+$root->listen('\OC\Files', 'preDelete', function ($node) use ($sourceEvents) {
+    if ($node instanceof Node) {
+        $sourceEvents()->deleting($node);
+    }
+});
+$root->listen('\OC\Files', 'postDelete', function ($node) use ($sourceEvents) {
+    if ($node instanceof Node) {
+        $sourceEvents()->deleted($node);
+    }
+});
+Util::connectHook('\OCA\Files_Trashbin\Trashbin', 'post_restore', SourceEventListener::class, 'onRestore');
 $dispatcher->addListener('OC\User\User::postSetEnabled', function ($event) use ($container) {
     $user = $event instanceof GenericEvent ? $event->getSubject() : null;
     if ($user instanceof IUser) {

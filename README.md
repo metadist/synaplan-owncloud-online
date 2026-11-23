@@ -11,7 +11,14 @@ talks to the **Synaplan backend API**.
 - **Translate** — translate files to another language from the context menu.
 - **Make searchable by AI** — send a file to Synaplan so the AI can find it
   when you ask a question; pick the knowledge folder, update it after the file
-  changes, or remove it again.
+  changes, or remove it again. With **Keep it up to date** (on by default)
+  Synaplan takes each new version of the file by itself.
+- **What Synaplan made of a file** — a bird after the name of each file
+  Synaplan holds says whether the AI can search it, is still adding it or is
+  taking a new version. It opens the file's **Synaplan** tab in the details
+  view: who owns it, who else can use it, what it touches and where it came
+  from, with **Remove from Synaplan** and **Open in Synaplan**. The research
+  page lists the person's searchable files.
 - **Research Chat** — a full-page AI assistant **and** a floating in-page
   launcher, with knowledge-group and model selection, streaming answers, and
   optional personal memories. `/pic` and `/vid` generate images and videos when
@@ -137,9 +144,10 @@ one person names (1 to 500, default 20).
 The personal setting and **Let Synaplan read this folder** appear only while
 Synaplan offers folder reads, that is while its
 `/.well-known/synaplan-configuration` lists `pickups` and `read_scope`. The
-app keeps that answer for five minutes, or for one minute when Synaplan did
-not answer, so a change on Synaplan's side shows within that time. A saved
-setting stays while they are hidden.
+app keeps that answer for five minutes, so a change on Synaplan's side shows
+within that time. While Synaplan gives no answer, its last answer of the past
+day stands in, and the app asks again every minute. A saved setting stays
+while they are hidden.
 
 A read arrives as a signed notice like a copy. The app checks the person's
 setting again, lists the folder with their credential and uploads what
@@ -149,6 +157,36 @@ going through the folder takes longer. A named folder stays allowed when it
 is renamed or moved, and Synaplan is told its new path. Watching folders is
 not in this release yet, so *Only what I watch* lets Synaplan read nothing
 for now.
+
+### What Synaplan made of a file
+
+The bird, the **Synaplan** tab and the list on the research page appear only
+with a personal account (*Connect your Synaplan account* or *Accounts created
+by the administrator*) and while Synaplan's
+`/.well-known/synaplan-configuration` lists `cloud_status`. **Keep it up to
+date** also needs this server registered and `source_events` listed. A page
+asks Synaplan about the files it shows, up to 500 at a time, and keeps each
+answer for a minute or until that file changes. While Synaplan does not
+answer, no bird shows and the tab says "Couldn't check Synaplan right now".
+
+When a file changes, moves, goes to the trash or comes back from it, a
+background job tells Synaplan with the person's credential, and for a shared
+file with its owner's too; for a folder, it also tells each file and folder
+inside it. A path longer than Synaplan's 255 bytes is sent empty, and
+Synaplan keeps the name it has. When Synaplan keeps the file up to date, it
+asks for the new version, and another background job uploads it with that
+person's credential, in place of Synaplan's copy. A file in the trash leaves
+the AI's search; restored, it comes back as the same file in Synaplan.
+
+Three gaps in Synaplan show here. The list on the research page shows no file
+yet: Synaplan's file list (`/api/v1/files`) does not say which file here each
+one came from. Synaplan asks the oldest account its person has here for a new
+version, ended accounts too, not the one whose file changed; when one
+Synaplan account is connected from two accounts here, the app uploads
+nothing for an account that is gone or cannot see the file. And Synaplan
+takes every change it hears of as a new version, even of the version it
+holds: a file saved shortly before it was made searchable reads as updating
+until Synaplan has taken it again, one or two background-job runs later.
 
 ## Development
 
@@ -269,7 +307,12 @@ the checkout's folder name, with the same container names. Stop it once with
 delete its data) before `make dev-up`.
 
 Journeys that need `occ` run it in `OCO_CONTAINER` (default
-`synaplan-owncloud-dev`).
+`synaplan-owncloud-dev`). The journey of a file's state in Synaplan pauses
+the cron container (`OCO_CRON_CONTAINER`, default
+`synaplan-owncloud-dev-cron`) and runs the app's background jobs itself, one
+at a time. The lifecycle journey connects the person it deletes to the
+Synaplan admin's account, so Ada's Synaplan account has no other account
+here.
 
 ### Test switches
 
@@ -279,6 +322,7 @@ App values the journeys set and the UI never shows. Each is off unless it is
 | Switch | When on |
 | --- | --- |
 | `dev_hold_inbound` | A copy from Synaplan is written, but its result waits: Synaplan shows it as still copying until the switch is deleted and the next cron run reports it |
+| `dev_mute_events` | The app does not tell Synaplan when a file changes, moves, goes to the trash or comes back, so Synaplan asks for no new version; a page still shows a changed file as out of date |
 
 ```bash
 make dev-occ CMD="config:app:set oco_synaplan dev_hold_inbound --value 1"
