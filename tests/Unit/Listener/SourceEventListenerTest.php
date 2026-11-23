@@ -197,6 +197,19 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
+    public function testAFileThatLeftAFolderAfterAFailedDeletionIsNotDeletedWithIt(): void
+    {
+        $folder = $this->specsFolder();
+        $this->listener()->deleting($folder);
+        $this->events->fileCache = array_values(array_filter($this->events->fileCache, static fn (array $entry): bool => $entry['id'] !== 52));
+        usleep(1);
+        $listener = $this->listener();
+        $listener->deleting($folder);
+        $listener->deleted($this->gone('/ada/files/Specs'));
+
+        self::assertSame(['ada send 51', 'ada send 50'], $this->events->steps(), 'b.pdf was moved out before the second attempt');
+    }
+
     public function testAFolderDeletedThroughAShareQueuesTheFilesTheOwnerKeepsInItForBoth(): void
     {
         $this->userFolders['ada'] = $this->userFolder([50 => $this->folder(50, '/ada/files/Specs', 'ada', [])]);

@@ -164,7 +164,7 @@ class SourceEventsJob extends Job
                 if ($now * 1_000_000 - $head['ord'] < self::HELD_FOR * 1_000_000) {
                     return;
                 }
-                $this->queue->removeHeld($uid, $head['walked']);
+                $this->queue->removeHeld($uid, $head['walked'], $head['ord']);
             } elseif ($head['step'] === SourceEventQueue::STEP_SHARE) {
                 $this->share($head);
                 $this->queue->remove([$head['seq']]);
