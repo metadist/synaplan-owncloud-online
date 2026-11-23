@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, type AiUser, type Mode, type RegistrationStatus, type Settings, type SettingsSaved } from '../shared/api'
+import {
+  api,
+  type AiUser,
+  type Mode,
+  type ReadMode,
+  type RegistrationStatus,
+  type Settings,
+  type SettingsSaved,
+} from '../shared/api'
 import { failureFromError } from '../shared/failures'
 import { LANGUAGES } from '../shared/languages'
 import { APP_NAME, notify, translate as t } from '../shared/oc'
@@ -35,6 +43,8 @@ const registrationToken = ref('')
 const registering = ref(false)
 const deliveryUrl = ref('')
 const deliveryUrlDefault = ref('')
+const readCeiling = ref<ReadMode>('allowed')
+const readFolderCap = ref(20)
 
 const aiUsers = ref<AiUser[]>([])
 const aiUsersLoading = ref(false)
@@ -84,6 +94,8 @@ function apply(s: Settings): void {
   linkInstance.value = s.link_instance
   deliveryUrl.value = s.delivery_url || ''
   deliveryUrlDefault.value = s.delivery_url_default || ''
+  readCeiling.value = s.read_scope_ceiling || 'allowed'
+  readFolderCap.value = s.read_folder_cap || 20
 }
 
 onMounted(async () => {
@@ -131,6 +143,8 @@ async function save(): Promise<void> {
       mode: mode.value,
       per_user_accounts: mode.value !== 'shared',
       link_auto_provision: linkAutoProvision.value,
+      read_scope_ceiling: readCeiling.value,
+      read_folder_cap: Number(readFolderCap.value) || 20,
     }
     if (mode.value === 'link' || mode.value === 'provision') {
       body.delivery_url = deliveryUrl.value.trim()
@@ -381,6 +395,43 @@ function formatConsentDate(iso: string | null | undefined): string {
         </label>
       </template>
     </fieldset>
+
+    <fieldset class="synaplan-admin-modes" data-testid="synaplan-read-ceiling">
+      <legend>{{ t('Synaplan may read at most') }}</legend>
+      <p class="oco-sub">
+        {{
+          t(
+            'People choose up to this in their personal settings. Lowering it narrows everyone who chose more; raising it widens nobody.',
+          )
+        }}
+      </p>
+      <label class="synaplan-admin-mode">
+        <input v-model="readCeiling" type="radio" name="synaplan-read-ceiling" value="watched" :disabled="saving" />
+        <span>{{ t('Watched folders') }}</span>
+      </label>
+      <label class="synaplan-admin-mode">
+        <input v-model="readCeiling" type="radio" name="synaplan-read-ceiling" value="allowed" :disabled="saving" />
+        <span>{{ t('Folders people allow') }}</span>
+      </label>
+      <label class="synaplan-admin-mode">
+        <input v-model="readCeiling" type="radio" name="synaplan-read-ceiling" value="all" :disabled="saving" />
+        <span>{{ t('All their files') }}</span>
+      </label>
+    </fieldset>
+    <template v-if="readCeiling !== 'watched'">
+      <div class="synaplan-admin-field">
+        <label for="synaplan-read-folder-cap">{{ t('Folders one person may allow') }}</label>
+        <input
+          id="synaplan-read-folder-cap"
+          v-model.number="readFolderCap"
+          type="number"
+          min="1"
+          max="500"
+          :disabled="saving"
+        />
+      </div>
+      <p class="oco-sub">{{ t('How many folders one person may name for Synaplan to read.') }}</p>
+    </template>
 
     <div class="synaplan-admin-actions">
       <button class="oco-btn primary" :disabled="saving" @click="save">{{ saving ? t('Saving…') : t('Save') }}</button>

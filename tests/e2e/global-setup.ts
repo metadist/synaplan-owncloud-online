@@ -5,6 +5,7 @@ import {
   OCO_URL,
   ownCloudAs,
   resetPerson,
+  resetReadLimit,
   saveSettings,
   SYNAPLAN_ADMIN,
   SYNAPLAN_URL,
@@ -86,8 +87,9 @@ function resetClientUpdateLimit(): void {
  * Connects the app to the Synaplan test stack the way an administrator
  * does: a Synaplan API key in the admin settings, "Connect your Synaplan
  * account" as the mode, this ownCloud.online registered. Each test person
- * starts without AI access and gets the file the journeys work on, so the
- * suite also runs again on the same stacks.
+ * starts without AI access, with no folder reads counted this hour, and gets
+ * the file the journeys work on, so the suite also runs again on the same
+ * stacks.
  */
 export default async function globalSetup(): Promise<void> {
   await waitUntilReady(`${SYNAPLAN_URL}/api/health`)
@@ -136,6 +138,7 @@ export default async function globalSetup(): Promise<void> {
 
   for (const uid of PEOPLE) {
     await resetPerson(uid)
+    resetReadLimit(uid)
     await uploadReview(uid)
   }
 }

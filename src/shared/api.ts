@@ -64,6 +64,33 @@ export interface Settings {
   /** Empty: Synaplan uses delivery_url_default. */
   delivery_url: string
   delivery_url_default: string
+  read_scope_ceiling: ReadMode
+  read_folder_cap: number
+}
+
+/** What a person lets Synaplan read, from the narrowest choice to the widest. */
+export type ReadMode = 'watched' | 'allowed' | 'all'
+
+export const READ_MODES: readonly ReadMode[] = ['watched', 'allowed', 'all']
+
+export interface ReadFolder {
+  id: string
+  path: string
+}
+
+export interface ReadScope {
+  mode: ReadMode
+  folders: ReadFolder[]
+}
+
+export interface Preferences {
+  copy_folder: string
+  read_scope: ReadScope
+  read_folder_cap: number
+  /** The widest choice the administrator lets people make. */
+  read_scope_ceiling: ReadMode
+  /** Whether the connected Synaplan reads folders at all. */
+  reads_folders: boolean
 }
 
 export interface SettingsSaved {
@@ -126,7 +153,7 @@ export interface AiUser {
 export const api = {
   getClientConfig: () => apiFetch<ClientConfig>('/api/v1/client-config'),
 
-  features: () => apiFetch<{ translation: boolean }>('/api/v1/features'),
+  features: () => apiFetch<{ translation: boolean; read_folders: boolean }>('/api/v1/features'),
 
   getGroups: () => apiFetch<{ success: boolean; groups: FileGroup[] }>('/api/v1/knowledge/groups'),
 
@@ -198,11 +225,22 @@ export const api = {
       body: { fileId, folder, name },
     }),
 
-  getPreferences: () => apiFetch<{ copy_folder: string }>('/api/v1/preferences'),
+  getPreferences: () => apiFetch<Preferences>('/api/v1/preferences'),
   savePreferences: (copyFolder: string) =>
     apiFetch<{ success: boolean; copy_folder: string }>('/api/v1/preferences', {
       method: 'PUT',
       body: { copy_folder: copyFolder },
+    }),
+  saveReadScope: (scope: ReadScope) =>
+    apiFetch<{ success: boolean; read_scope: ReadScope }>('/api/v1/preferences', {
+      method: 'PUT',
+      body: { read_scope: scope },
+    }),
+  /** Rejected with code `cap` or `ceiling` when no further folder may be named. */
+  allowFolder: (fileId: number, path: string) =>
+    apiFetch<{ success: boolean; read_scope: ReadScope }>('/api/v1/preferences/read-folders', {
+      method: 'POST',
+      body: { fileId: String(fileId), path },
     }),
 
   notices: () => apiFetch<{ notices: CopyNotice[] }>('/api/v1/notices'),

@@ -9,19 +9,25 @@ import {
   logIn,
   occ,
   OCO_URL,
+  openFileMenu,
+  openFolderRead,
   ownCloudAs,
   PERSONAL_SETTINGS,
   personalSection,
+  readThrough,
+  saveSettings,
   SYNAPLAN_PERSON,
   SYNAPLAN_URL,
   synaplanAs,
 } from './support'
 
 /**
- * Files from Synaplan. Synaplan only sends a signed notice naming the person;
- * the app claims, downloads and reports the copy with that person's own
- * credential, never with the instance's. The person picks Synaplan files from
- * the New menu, and the chat saves what Synaplan made into their files.
+ * Files from Synaplan, and folders Synaplan reads. Synaplan only sends a
+ * signed notice naming the person; the app claims, downloads, lists, uploads
+ * and reports with that person's own credential, never with the instance's.
+ * The person picks Synaplan files from the New menu, the chat saves what
+ * Synaplan made into their files, and the person decides what Synaplan may
+ * read, within the administrator's ceiling.
  */
 
 const UID = 'ada'
@@ -65,6 +71,50 @@ async function copiesOf(synaplan: APIRequestContext, fileId: number): Promise<Co
   const listed = await synaplan.get('/api/v1/files/copies', { params: { ids: String(fileId) } })
   expect(listed.ok(), 'listing the copies in Synaplan').toBe(true)
   return ((await listed.json()) as { copies: Copy[] }).copies
+}
+
+interface ReadScope {
+  mode: string
+  folders: { id: string; path: string }[]
+}
+
+/** What Ada lets Synaplan read, as the app keeps it. */
+async function readScopeOf(): Promise<ReadScope> {
+  const person = await ownCloudAs(UID)
+  try {
+    const answer = await person.get(`${APP}/api/v1/preferences`)
+    expect(answer.ok(), 'reading the personal settings').toBe(true)
+    return ((await answer.json()) as { read_scope: ReadScope }).read_scope
+  } finally {
+    await person.dispose()
+  }
+}
+
+/** Save what Ada lets Synaplan read, as her personal settings do, and return the choice the app kept. */
+async function saveReadScope(mode: string, folders: string[] = []): Promise<string> {
+  const person = await ownCloudAs(UID)
+  try {
+    const saved = await person.put(`${APP}/api/v1/preferences`, {
+      data: { read_scope: { mode, folders: folders.map((path) => ({ id: '', path })) } },
+    })
+    expect(saved.ok(), `saving the read setting: ${await saved.text()}`).toBe(true)
+    return ((await saved.json()) as { read_scope: ReadScope }).read_scope.mode
+  } finally {
+    await person.dispose()
+  }
+}
+
+/** Make a folder in Ada's files with a short text file for each name. */
+async function makeFolder(dav: APIRequestContext, folder: string, files: string[] = []): Promise<void> {
+  const made = await dav.fetch(`${DAV}/${folder}`, { method: 'MKCOL' })
+  expect(made.ok(), `making ${folder}`).toBe(true)
+  for (const file of files) {
+    const put = await dav.put(`${DAV}/${folder}/${file}`, {
+      data: `${file} for Synaplan`,
+      headers: { 'Content-Type': 'text/plain' },
+    })
+    expect(put.ok(), `uploading ${folder}/${file}`).toBe(true)
+  }
 }
 
 test.describe('as a person', () => {
@@ -245,6 +295,157 @@ test.describe('as a person', () => {
       await synaplan.dispose()
     }
   })
+
+  test('Synaplan reads a folder only when the person allows it, and never beyond the administrator’s ceiling', async () => {
+    readThrough(UID)
+    const folder = `Invoices-${Date.now()}`
+    const dav = await davAs(UID)
+    await makeFolder(dav, folder, ['invoice-1.txt', 'invoice-2.txt'])
+    try {
+      expect(await saveReadScope('all'), 'All my files is above the ceiling').toBe('allowed')
+      expect(openFolderRead(folder)).toMatchObject({ state: 'refused', error: 'outside_scope' })
+
+      await saveSettings({ read_scope_ceiling: 'all' })
+      expect(await saveReadScope('all')).toBe('all')
+      const read = openFolderRead(folder)
+      expect(read.state, JSON.stringify(read)).toBe('done')
+      expect([...(read.names ?? [])].sort()).toEqual(['invoice-1.txt', 'invoice-2.txt'])
+
+      // Lowering the ceiling narrows the setting here at once. Synaplan
+      // hears of it from the hourly job; until then this app refuses.
+      await saveSettings({ read_scope_ceiling: 'allowed' })
+      expect((await readScopeOf()).mode).toBe('allowed')
+      const narrowed = openFolderRead(folder)
+      expect(['refused', 'failed'], JSON.stringify(narrowed)).toContain(narrowed.state)
+      expect(narrowed).toMatchObject({ error: 'outside_scope' })
+      expect(narrowed.sent ?? 0).toBe(0)
+      await saveSettings({ read_scope_ceiling: 'all' })
+      expect((await readScopeOf()).mode, 'raising the ceiling widens nobody').toBe('allowed')
+
+      // Synaplan refuses this before it asks this app. It checks a read only
+      // against the named folders in its copy, never the person's watches,
+      // so it would refuse a watched folder the same way: a gap in Synaplan,
+      // which plan 07 §5 has count the watches.
+      expect(await saveReadScope('watched')).toBe('watched')
+      expect(openFolderRead(folder)).toMatchObject({ state: 'refused', error: 'outside_scope' })
+    } finally {
+      await saveSettings({ read_scope_ceiling: 'allowed' })
+      await saveReadScope('watched')
+      await dav.delete(`${DAV}/${folder}`)
+      await dav.dispose()
+    }
+  })
+
+  test('an allowed folder can still be read by Synaplan after it is moved', async () => {
+    readThrough(UID)
+    const stamp = Date.now()
+    const folder = `Receipts-${stamp}`
+    const archive = `Archive-${stamp}`
+    const moved = `${archive}/Receipts 2026`
+    const dav = await davAs(UID)
+    const synaplan = await synaplanAs(SYNAPLAN_PERSON)
+    await makeFolder(dav, folder, ['receipt.txt'])
+    await makeFolder(dav, archive)
+    try {
+      expect(await saveReadScope('allowed', [folder])).toBe('allowed')
+      expect(openFolderRead(folder)).toMatchObject({ state: 'done', names: ['receipt.txt'] })
+
+      const move = await dav.fetch(`${DAV}/${folder}`, {
+        method: 'MOVE',
+        headers: { Destination: `${OCO_URL}${DAV}/${encodeURI(moved)}` },
+      })
+      expect(move.ok(), 'moving the folder').toBe(true)
+      expect((await readScopeOf()).folders.map((allowed) => allowed.path)).toEqual([moved])
+      const [link] = await linksOf(synaplan, UID)
+      expect(link?.read_scope, 'Synaplan holds the new path').toEqual({ mode: 'allowed', folders: [moved] })
+
+      expect(openFolderRead(moved)).toMatchObject({ state: 'done', names: ['receipt.txt'] })
+      expect(openFolderRead(folder)).toMatchObject({ state: 'refused', error: 'outside_scope' })
+    } finally {
+      await saveReadScope('watched')
+      await dav.delete(`${DAV}/${archive}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await dav.dispose()
+      await synaplan.dispose()
+    }
+  })
+
+  test('"Let Synaplan read this folder" lets Synaplan read a folder it refused, and the settings list it', async ({
+    page,
+  }) => {
+    readThrough(UID)
+    const stamp = Date.now()
+    const parent = `HR-${stamp}`
+    const folder = `${parent}/Contracts`
+    const dav = await davAs(UID)
+    const synaplan = await synaplanAs(SYNAPLAN_PERSON)
+    await makeFolder(dav, parent)
+    await makeFolder(dav, folder, ['contract.txt'])
+    try {
+      expect(openFolderRead(folder), 'refused before Ada allows it').toMatchObject({
+        state: 'refused',
+        error: 'outside_scope',
+      })
+
+      const menu = await openFileMenu(page, 'Contracts', `/${parent}`)
+      await menu.filter({ hasText: 'Let Synaplan read this folder' }).click()
+      await expect(page.locator('#notification').getByText('Synaplan may read this folder.')).toBeVisible()
+      const [link] = await linksOf(synaplan, UID)
+      expect(link?.can_read).toBe(true)
+      expect(link?.read_scope, 'what the Apps page in Synaplan shows').toEqual({ mode: 'allowed', folders: [folder] })
+      expect(openFolderRead(folder)).toMatchObject({ state: 'done', names: ['contract.txt'] })
+
+      await page.goto(PERSONAL_SETTINGS)
+      const section = personalSection(page)
+      await expect(section.getByRole('radio', { name: 'Also folders I allow' })).toBeChecked()
+      const listed = section.getByTestId('synaplan-read-folders').locator('li', { hasText: folder })
+      await listed.getByRole('button', { name: 'Remove' }).click()
+      await expect(listed).toHaveCount(0)
+      await section.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(section.getByRole('status')).toHaveText('Saved')
+      expect(openFolderRead(folder)).toMatchObject({ state: 'refused', error: 'outside_scope' })
+    } finally {
+      await saveReadScope('watched')
+      await dav.delete(`${DAV}/${parent}`)
+      await dav.dispose()
+      await synaplan.dispose()
+    }
+  })
+
+  test('the person sees the read choices the administrator allows, and only those', async ({ page }) => {
+    const shelf = `Shelf-${Date.now()}`
+    const dav = await davAs(UID)
+    await makeFolder(dav, shelf)
+    try {
+      await saveSettings({ read_scope_ceiling: 'all' })
+      await page.goto(PERSONAL_SETTINGS)
+      const read = personalSection(page).getByTestId('synaplan-read')
+      await expect(read.getByRole('radio')).toHaveCount(3)
+      for (const choice of ['Only what I watch', 'Also folders I allow', 'All my files']) {
+        await expect(read.getByRole('radio', { name: choice })).toBeVisible()
+      }
+      await expect(read.getByText('Synaplan can read every file you can open.')).toBeVisible()
+
+      await saveSettings({ read_scope_ceiling: 'allowed' })
+      await page.reload()
+      await expect(read.getByRole('radio')).toHaveCount(2)
+      await expect(read.getByRole('radio', { name: 'All my files' })).toHaveCount(0)
+      await expect(read.getByText('Synaplan can read every file you can open.')).toHaveCount(0)
+
+      await saveSettings({ read_scope_ceiling: 'watched' })
+      await page.reload()
+      await expect(read.getByRole('radio')).toHaveCount(1)
+      await expect(read.getByRole('radio', { name: 'Only what I watch' })).toBeChecked()
+      await expect(personalSection(page).getByText('Let Synaplan read this folder')).toHaveCount(0)
+      const menu = await openFileMenu(page, shelf)
+      await expect(menu.first()).toBeVisible()
+      await expect(menu.filter({ hasText: 'Let Synaplan read this folder' })).toHaveCount(0)
+    } finally {
+      await saveSettings({ read_scope_ceiling: 'allowed' })
+      await dav.delete(`${DAV}/${shelf}`)
+      await dav.dispose()
+    }
+  })
 })
 
 test('a notice Synaplan did not sign does nothing', async () => {
@@ -317,5 +518,38 @@ test('the administrator sees and sets the address Synaplan uses to reach this ow
     await address.fill(before)
     await save.click()
     await expect(page.getByText('Settings saved', { exact: true })).toBeVisible()
+  }
+})
+
+test('the administrator sets how much Synaplan may read, and how many folders one person may allow', async ({
+  page,
+}) => {
+  await logIn(page, 'admin')
+  await page.goto(ADMIN_SETTINGS)
+  const ceiling = page.getByTestId('synaplan-read-ceiling')
+  const count = page.getByLabel('Folders one person may allow')
+  const save = page.getByRole('button', { name: 'Save', exact: true })
+  await expect(ceiling.getByRole('radio')).toHaveCount(3)
+  await expect(ceiling.getByRole('radio', { name: 'Folders people allow' })).toBeChecked()
+  await expect(count).toHaveValue('20')
+
+  try {
+    await ceiling.getByRole('radio', { name: 'Watched folders' }).check()
+    await expect(count, 'no folders to count under watched folders').toHaveCount(0)
+    await save.click()
+    await expect(page.getByText('Settings saved', { exact: true })).toBeVisible()
+    await page.reload()
+    await expect(ceiling.getByRole('radio', { name: 'Watched folders' })).toBeChecked()
+    await expect(count).toHaveCount(0)
+
+    await ceiling.getByRole('radio', { name: 'All their files' }).check()
+    await count.fill('3')
+    await save.click()
+    await expect(page.getByText('Settings saved', { exact: true })).toBeVisible()
+    await page.reload()
+    await expect(ceiling.getByRole('radio', { name: 'All their files' })).toBeChecked()
+    await expect(count).toHaveValue('3')
+  } finally {
+    await saveSettings({ read_scope_ceiling: 'allowed', read_folder_cap: 20 })
   }
 })

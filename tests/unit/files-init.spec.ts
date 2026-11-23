@@ -66,6 +66,78 @@ describe('the file actions', () => {
       'synaplanSummarize',
     ])
   })
+
+  it('offer "Let Synaplan read this folder" where the administrator lets people name folders', async () => {
+    expect(await actionsAfter({ translation: false, read_folders: true })).toContain('synaplanReadFolder')
+    expect(await actionsAfter({ translation: false, read_folders: false })).not.toContain('synaplanReadFolder')
+  })
+})
+
+/** The folder action, once the page heard that folders may be named; `answer` replies to its request. */
+async function readFolderAction(answer: () => Response) {
+  const registerAction = vi.fn()
+  const showTemporary = vi.fn()
+  const fetch = vi.fn(async (url: string, _init?: RequestInit) =>
+    url.endsWith('/api/v1/features') ? Response.json({ translation: false, read_folders: true }) : answer(),
+  )
+  vi.stubGlobal('OCA', { Files: { fileActions: { registerAction } } })
+  vi.stubGlobal('OC', {
+    generateUrl: (path: string) => '/index.php' + path,
+    imagePath: (app: string, file: string) => `/apps/${app}/img/${file}`,
+    requestToken: 'request-token',
+    PERMISSION_READ: 1,
+    Notification: { showTemporary, show: vi.fn() },
+  })
+  vi.stubGlobal('fetch', fetch)
+  vi.resetModules()
+  await import('../../src/files-init')
+  await vi.waitFor(() =>
+    expect(registerAction.mock.calls.map(([action]) => action.name)).toContain('synaplanReadFolder'),
+  )
+  const action = registerAction.mock.calls
+    .map(([registered]) => registered)
+    .find((registered) => registered.name === 'synaplanReadFolder')
+
+  return { action, fetch, showTemporary }
+}
+
+describe('Let Synaplan read this folder', () => {
+  it('names the folder by its id and its place in the person’s files', async () => {
+    const { action, fetch, showTemporary } = await readFolderAction(() => Response.json({ success: true }))
+    expect(action.mime).toBe('dir')
+
+    action.actionHandler('Contracts', { fileInfoModel: { id: 42 }, dir: '/HR' })
+
+    await vi.waitFor(() => expect(showTemporary).toHaveBeenCalledWith('Synaplan may read this folder.'))
+    const call = fetch.mock.calls.find(([url]) => url.endsWith('/read-folders'))
+    expect(call?.[0]).toBe('/index.php/apps/oco_synaplan/api/v1/preferences/read-folders')
+    expect(call?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ fileId: '42', path: 'HR/Contracts' })
+  })
+
+  it.each([
+    ['cap', 409, 'Synaplan may already read as many folders as your administrator allows.'],
+    ['ceiling', 403, 'Your administrator lets Synaplan read only the folders you watch.'],
+  ])('says so when the administrator’s limit (%s) stops it', async (error, status, sentence) => {
+    const { action, showTemporary } = await readFolderAction(() => Response.json({ success: false, error }, { status }))
+
+    action.actionHandler('HR', { fileInfoModel: { id: 7 }, dir: '/' })
+
+    await vi.waitFor(() => expect(showTemporary).toHaveBeenCalledWith(sentence))
+  })
+})
+
+describe('folderPath', () => {
+  it.each([
+    ['/', 'HR', 'HR'],
+    ['/HR', 'Contracts', 'HR/Contracts'],
+    ['/HR/', 'Contracts', 'HR/Contracts'],
+    [undefined, 'HR', 'HR'],
+  ])('puts %s and %s together as %s', async (dir, name, path) => {
+    const { folderPath } = await import('../../src/files-init')
+
+    expect(folderPath(dir, name)).toBe(path)
+  })
 })
 
 /** The Files app's New menu as the plugin sees it, after the plugin attached. */

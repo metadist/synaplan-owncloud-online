@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, type LinkStatus } from '../shared/api'
+import { api, READ_MODES, type LinkStatus, type ReadFolder, type ReadMode, type ReadScope } from '../shared/api'
 import { startLink } from '../shared/link'
 import { injectModalStyles } from '../shared/mount'
 import { APP_NAME, canPickFolder, pickFolder, translate as t } from '../shared/oc'
@@ -16,6 +16,17 @@ const bannerType = ref<BannerType>('success')
 const copyFolder = ref('')
 const savingFolder = ref(false)
 const folderPicker = canPickFolder()
+
+const readMode = ref<ReadMode>('watched')
+const readFolders = ref<ReadFolder[]>([])
+const readFolderCap = ref(20)
+/** The widest choice the administrator lets people make; the wider ones are not offered. */
+const readCeiling = ref<ReadMode>('allowed')
+/** A Synaplan that reads no folders gets no read setting; the saved one stays as it is. */
+const readsFolders = ref(false)
+const savingScope = ref(false)
+const mayNameFolders = computed(() => readCeiling.value !== 'watched')
+const mayReadAll = computed(() => readCeiling.value === 'all')
 
 const isLinked = computed(() => status.value?.kind === 'linked')
 const canConnect = computed(() => status.value?.mode === 'link' && !isLinked.value && !!status.value?.link_available)
@@ -125,11 +136,53 @@ async function disconnect(): Promise<void> {
   }
 }
 
-async function loadFolder(): Promise<void> {
+async function loadPreferences(): Promise<void> {
   try {
-    copyFolder.value = (await api.getPreferences()).copy_folder || ''
+    const preferences = await api.getPreferences()
+    copyFolder.value = preferences.copy_folder || ''
+    applyScope(preferences.read_scope)
+    readFolderCap.value = preferences.read_folder_cap || 20
+    readCeiling.value = READ_MODES.includes(preferences.read_scope_ceiling) ? preferences.read_scope_ceiling : 'allowed'
+    readsFolders.value = preferences.reads_folders === true
   } catch {
-    // The setting stays as it is; saving it shows a failure if the server is away.
+    // The settings stay as they are; saving them shows a failure if the server is away.
+  }
+}
+
+function applyScope(scope: ReadScope | undefined): void {
+  readMode.value = scope && READ_MODES.includes(scope.mode) ? scope.mode : 'watched'
+  readFolders.value = Array.isArray(scope?.folders) ? scope.folders : []
+}
+
+function removeFolder(path: string): void {
+  readFolders.value = readFolders.value.filter((folder) => folder.path !== path)
+}
+
+/** A folder added here counts once the setting is saved, as "Also folders I allow". */
+function addFolder(): void {
+  pickFolder(t('Add a folder'), (picked) => {
+    const path = picked.replace(/^\/+|\/+$/g, '')
+    if (path === '' || readFolders.value.some((folder) => folder.path === path)) {
+      return
+    }
+    readFolders.value = [...readFolders.value, { id: '', path }]
+    readMode.value = 'allowed'
+  })
+}
+
+async function saveScope(): Promise<void> {
+  if (readMode.value === 'allowed' && readFolders.value.length > readFolderCap.value) {
+    show(t('Synaplan may already read as many folders as your administrator allows.'), 'error')
+    return
+  }
+  savingScope.value = true
+  try {
+    applyScope((await api.saveReadScope({ mode: readMode.value, folders: readFolders.value })).read_scope)
+    show(t('Saved'), 'success')
+  } catch {
+    show(t('Could not save that folder.'), 'error')
+  } finally {
+    savingScope.value = false
   }
 }
 
@@ -152,7 +205,7 @@ function chooseFolder(): void {
 onMounted(async () => {
   injectModalStyles()
   applyQueryBanner()
-  await Promise.all([loadStatus(), loadFolder()])
+  await Promise.all([loadStatus(), loadPreferences()])
 })
 </script>
 
@@ -197,6 +250,52 @@ onMounted(async () => {
           {{ t('Use the default') }}
         </button>
       </div>
+
+      <template v-if="readsFolders">
+        <h3 id="synaplan-read-title">{{ t('What may Synaplan read in your {app}?', { app: APP_NAME }) }}</h3>
+        <div class="synaplan-read" role="radiogroup" aria-labelledby="synaplan-read-title" data-testid="synaplan-read">
+          <div class="synaplan-read-choice">
+            <label>
+              <input v-model="readMode" type="radio" name="synaplan-read" value="watched" :disabled="savingScope" />
+              {{ t('Only what I watch') }}
+            </label>
+          </div>
+          <div v-if="mayNameFolders" class="synaplan-read-choice">
+            <label>
+              <input v-model="readMode" type="radio" name="synaplan-read" value="allowed" :disabled="savingScope" />
+              {{ t('Also folders I allow') }}
+            </label>
+            <div>
+              <ul class="synaplan-read-folders" data-testid="synaplan-read-folders">
+                <li v-for="folder in readFolders" :key="folder.path">
+                  <span>{{ folder.path }}</span>
+                  <button type="button" class="oco-btn" :disabled="savingScope" @click="removeFolder(folder.path)">
+                    {{ t('Remove') }}
+                  </button>
+                </li>
+              </ul>
+              <button v-if="folderPicker" type="button" class="oco-btn" :disabled="savingScope" @click="addFolder">
+                {{ t('Add a folder') }}
+              </button>
+            </div>
+          </div>
+          <div v-if="mayReadAll" class="synaplan-read-choice">
+            <label>
+              <input v-model="readMode" type="radio" name="synaplan-read" value="all" :disabled="savingScope" />
+              {{ t('All my files') }}
+            </label>
+            <p class="synaplan-read-warning">{{ t('Synaplan can read every file you can open.') }}</p>
+          </div>
+        </div>
+        <p v-if="mayNameFolders" class="settings-hint">
+          {{ t('Any folder’s … menu → "Let Synaplan read this folder" adds it here.') }}
+        </p>
+        <div class="oco-actions synaplan-personal-actions">
+          <button type="button" class="oco-btn primary" :disabled="savingScope" @click="saveScope">
+            {{ savingScope ? t('Saving…') : t('Save') }}
+          </button>
+        </div>
+      </template>
     </template>
   </div>
 </template>
@@ -216,6 +315,34 @@ onMounted(async () => {
 }
 .synaplan-personal-actions {
   justify-content: flex-start;
+}
+.synaplan-read-choice {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) 1fr;
+  gap: 16px;
+  align-items: start;
+  margin: 8px 0;
+}
+.synaplan-read-choice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.synaplan-read .synaplan-read-warning {
+  margin: 0;
+  color: var(--color-warning, #8a6100);
+}
+.synaplan-read-folders {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.synaplan-read-folders li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0;
 }
 .synaplan-banner {
   border-left: 4px solid;

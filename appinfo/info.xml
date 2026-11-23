@@ -30,6 +30,10 @@ Requires a running Synaplan server.
 	<licence>Apache-2.0</licence>
 	<author mail="info@synaplan.com" homepage="https://synaplan.com">Synaplan</author>
 	<namespace>OcoSynaplan</namespace>
+	<!-- WebDAV requests load only filesystem apps, and this one follows files moved there. -->
+	<types>
+		<filesystem/>
+	</types>
 	<category>integration</category>
 	<category>tools</category>
 	<website>https://synaplan.com</website>

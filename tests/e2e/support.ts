@@ -154,25 +154,18 @@ function ownIdentities(uid: string): string {
  * @param uid ownCloud.online user id
  */
 function ownedAccounts(uid: string): Map<number, string> {
-  const sql = `SELECT CONCAT('owned:', COALESCE(GROUP_CONCAT(DISTINCT CONCAT(u.BID, '=', u.BMAIL) SEPARATOR ';'), '')) AS owned
+  const owned = synaplanSql(
+    `SELECT CONCAT('owned:', COALESCE(GROUP_CONCAT(DISTINCT CONCAT(u.BID, '=', u.BMAIL) SEPARATOR ';'), '')) AS owned
     FROM BEXTERNALIDENTITIES i JOIN BUSER u ON u.BID = i.BUSERID
     WHERE i.BID IN (${ownIdentities(uid)})
     AND i.BUSERID NOT IN (SELECT o.BUSERID FROM BEXTERNALIDENTITIES o
       LEFT JOIN BPLATFORMINSTANCES p ON p.BINSTANCEID = o.BINSTANCEID
-      WHERE p.BID IS NULL OR NOT (${OURS}))`
-  const run = spawnSync(
-    'docker',
-    ['exec', SYNAPLAN_CONTAINER, 'php', 'bin/console', 'dbal:run-sql', sql.replace(/\s+/g, ' ')],
-    { encoding: 'utf8' },
+      WHERE p.BID IS NULL OR NOT (${OURS}))`,
+    /owned:(\S*)/,
+    `the Synaplan accounts of ${uid}`,
   )
-  const match = /owned:(\S*)/.exec(run.stdout ?? '')
-  if (run.status !== 0 || match === null) {
-    throw new Error(
-      `Could not read the Synaplan accounts of ${uid} in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
-    )
-  }
   const accounts = new Map<number, string>()
-  for (const pair of match[1].split(';').filter((entry) => entry !== '')) {
+  for (const pair of owned.split(';').filter((entry) => entry !== '')) {
     const at = pair.indexOf('=')
     accounts.set(Number(pair.slice(0, at)), pair.slice(at + 1))
   }
@@ -187,6 +180,130 @@ function ownedAccounts(uid: string): Map<number, string> {
  */
 export function ownedAccountIds(uid: string): number[] {
   return [...ownedAccounts(uid).keys()]
+}
+
+/**
+ * Run SQL in the Synaplan test stack's database and return the first group
+ * of `found` in what it printed. Synaplan's admin API does not show
+ * identities.
+ */
+function synaplanSql(sql: string, found: RegExp, what: string): string {
+  const run = spawnSync(
+    'docker',
+    ['exec', SYNAPLAN_CONTAINER, 'php', 'bin/console', 'dbal:run-sql', sql.replace(/\s+/g, ' ')],
+    { encoding: 'utf8' },
+  )
+  const match = found.exec(run.stdout ?? '')
+  if (run.status !== 0 || match === null) {
+    throw new Error(
+      `Could not read ${what} in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
+    )
+  }
+  return match[1]
+}
+
+/**
+ * Whether Synaplan's dev command for folder reads goes through the person's
+ * active link from this ownCloud.online: it reads through the Synaplan
+ * person's newest ownCloud link on any server, ended ones too.
+ *
+ * @param uid ownCloud.online user id
+ */
+function folderReadsGoThrough(uid: string): boolean {
+  const ours = synaplanSql(
+    `SELECT CONCAT('ours:', COUNT(*)) AS ours FROM (
+      SELECT i.BID, i.BSTATUS FROM BEXTERNALIDENTITIES i JOIN BUSER u ON u.BID = i.BUSERID
+      WHERE u.BMAIL = '${SYNAPLAN_PERSON.email}' AND i.BSOURCE = 'owncloud' AND i.BINSTANCEID <> ''
+      ORDER BY i.BCREATED DESC, i.BID DESC LIMIT 1) n
+    WHERE n.BSTATUS = 'active' AND n.BID IN (${ownIdentities(uid)})`,
+    /ours:(\d+)/,
+    `the Synaplan links of ${uid}`,
+  )
+  return ours === '1'
+}
+
+/**
+ * Have {@link openFolderRead} read through the person's link. A journey that
+ * linked someone else to the Synaplan person later takes the dev command's
+ * reads over, and connecting again keeps the link's first creation time, so
+ * this moves that time to now on the test stack.
+ *
+ * @param uid ownCloud.online user id, connected
+ */
+export function readThrough(uid: string): void {
+  if (folderReadsGoThrough(uid)) {
+    return
+  }
+  synaplanSql(
+    `UPDATE BEXTERNALIDENTITIES SET BCREATED = UNIX_TIMESTAMP()
+    WHERE BSTATUS = 'active' AND BID IN (SELECT o.BID FROM (${ownIdentities(uid)}) o)`,
+    /(\d+)/,
+    `the Synaplan link of ${uid}`,
+  )
+  expect(folderReadsGoThrough(uid), `folder reads go through the link of ${uid}`).toBe(true)
+}
+
+/**
+ * Synaplan allows a person 20 folder reads an hour and has no setting to
+ * lift that. One run of the journeys opens about six, so a test stack that
+ * stays up between runs refuses them within a few runs. This dates the
+ * person's reads through this ownCloud.online an hour back on the test
+ * stack, so they no longer count.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function resetReadLimit(uid: string): void {
+  synaplanSql(
+    `UPDATE BCLOUDPICKUPS SET BCREATED = BCREATED - 3600
+    WHERE BCREATED >= UNIX_TIMESTAMP() - 3600 AND BIDENTITYID IN (${ownIdentities(uid)})`,
+    /(\d+)/,
+    `the Synaplan folder reads of ${uid}`,
+  )
+}
+
+/** How a folder read Synaplan opened ended. */
+export interface FolderRead {
+  state: string
+  listed?: number
+  sent?: number
+  names?: string[]
+  error?: string | null
+}
+
+/**
+ * Have Synaplan read a folder of Ada's files, for the Synaplan person she
+ * connected. Synaplan opens a read from a task's folder step, which needs a
+ * planning model; its dev command opens the same request without one, and
+ * prints how the read ended. It reads through that person's newest
+ * ownCloud link.
+ *
+ * @param folder the folder's path in Ada's files
+ */
+export function openFolderRead(folder: string): FolderRead {
+  const run = spawnSync(
+    'docker',
+    [
+      'exec',
+      SYNAPLAN_CONTAINER,
+      'php',
+      'bin/console',
+      'app:cloud-pickups:open-test',
+      `--email=${SYNAPLAN_PERSON.email}`,
+      '--client=owncloud',
+      `--folder=${folder}`,
+      '--mode=fetch',
+    ],
+    { encoding: 'utf8' },
+  )
+  // A refused read exits non-zero and still prints its line.
+  const line = (run.stdout ?? '').trim().split('\n').pop() ?? ''
+  try {
+    return JSON.parse(line) as FolderRead
+  } catch {
+    throw new Error(
+      `Synaplan opened no folder read in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
+    )
+  }
 }
 
 /** The email of a Synaplan account, as its admin API shows it; empty when there is none. */
@@ -314,21 +431,34 @@ export function dialogOf(page: Page): Locator {
   return page.locator('.oco-modal-panel')
 }
 
-/** Open one of the app's actions from the file's menu in Files. */
-export async function openFileAction(page: Page, action: string, file = FILE): Promise<Locator> {
-  // The menu is built when it opens; Translate joins it once the page knows Synaplan translates.
+/**
+ * Open the menu of a file or folder in Files, once the page knows what
+ * Synaplan offers, and return its entries.
+ *
+ * @param dir the folder Files shows, `/` for the top of the person's files
+ */
+export async function openFileMenu(page: Page, file = FILE, dir = '/'): Promise<Locator> {
+  // The menu is built when it opens; Translate and "Let Synaplan read this
+  // folder" join it once the page knows what Synaplan offers.
   const features = page.waitForResponse((response) => response.url().includes('/apps/oco_synaplan/api/v1/features'))
-  await page.goto('/index.php/apps/files/')
+  await page.goto(`/index.php/apps/files/?dir=${encodeURIComponent(dir)}`)
   await features
   const row = page.locator(`#fileList tr[data-file="${file}"]`)
-  const item = page.locator('.fileActionsMenu a.action', { hasText: action })
+  const menu = page.locator('.fileActionsMenu')
   // Files redraws a row's actions when an app adds one, which can take the
   // menu away while it opens.
   await expect(async () => {
     await row.hover()
     await row.locator('.action-menu').click({ force: true, timeout: 2_000 })
-    await expect(item).toBeVisible({ timeout: 2_000 })
+    await expect(menu).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 15_000 })
+  return menu.locator('a.action')
+}
+
+/** Open one of the app's actions from the file's menu in Files. */
+export async function openFileAction(page: Page, action: string, file = FILE): Promise<Locator> {
+  const item = (await openFileMenu(page, file)).filter({ hasText: action })
+  await expect(item).toBeVisible()
   await item.click()
   const dialog = dialogOf(page)
   await expect(dialog).toBeVisible()
@@ -438,6 +568,10 @@ interface Link {
   host: string
   external_id: string
   status: string
+  /** Whether the app hands files to a run when asked. */
+  can_read?: boolean
+  /** What the person lets Synaplan read, as the app last reported it. */
+  read_scope?: { mode: string; folders: string[] }
 }
 
 /** The Synaplan person's links from this ownCloud.online for one person, ended ones too. */

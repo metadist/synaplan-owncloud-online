@@ -125,6 +125,20 @@ final class OpenApiContract
     }
 
     /**
+     * The fields every successful answer to the operation carries.
+     *
+     * @return list<string>
+     */
+    public function answerRequires(string $method, string $path): array
+    {
+        $template = $this->specPath($method, $path);
+        $answer = $template === null ? null : ($this->spec['paths'][$template][strtolower($method)]['responses']['200']['content']['application/json']['schema'] ?? null);
+        $required = is_array($answer) ? ($this->resolve($answer)['required'] ?? []) : [];
+
+        return is_array($required) ? array_values(array_filter($required, 'is_string')) : [];
+    }
+
+    /**
      * True when the recorded call is that operation, with each parameter one
      * segment. A shared prefix is not a match.
      */
