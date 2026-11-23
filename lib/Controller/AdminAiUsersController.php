@@ -12,9 +12,12 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\AdminAiUsersService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\ILogger;
 use OCP\IRequest;
 
 /**
@@ -25,9 +28,12 @@ use OCP\IRequest;
  */
 class AdminAiUsersController extends Controller
 {
+    use RespondsToFailures;
+
     public function __construct(
         IRequest $request,
         private AdminAiUsersService $aiUsers,
+        private ILogger $logger,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -42,12 +48,20 @@ class AdminAiUsersController extends Controller
 
     public function usage(string $uid): JSONResponse
     {
-        return new JSONResponse($this->aiUsers->usage($uid));
+        try {
+            return new JSONResponse($this->aiUsers->usage($uid));
+        } catch (\Exception $e) {
+            return $this->failed($e, 'Usage lookup failed');
+        }
     }
 
     public function deactivate(string $uid): JSONResponse
     {
-        $this->aiUsers->deactivate($uid);
+        try {
+            $this->aiUsers->deactivate($uid);
+        } catch (FailureException $e) {
+            return $this->failed($e, 'Deactivating AI failed');
+        }
 
         return new JSONResponse(['success' => true]);
     }

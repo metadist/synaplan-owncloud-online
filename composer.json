@@ -8,12 +8,27 @@
         "ext-curl": "*"
     },
     "require-dev": {
-        "friendsofphp/php-cs-fixer": "^3.0"
+        "doctrine/dbal": "^3.10",
+        "friendsofphp/php-cs-fixer": "^3.0",
+        "phpstan/phpstan": "^2.1.53",
+        "phpunit/phpunit": "^11.0"
     },
     "autoload": {
         "psr-4": {
             "OCA\\OcoSynaplan\\": "lib/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "OCA\\OcoSynaplan\\Tests\\": "tests/",
+            "OCP\\": ".cache/ocp/",
+            "OC\\": "tests/stubs/OC/"
+        },
+        "classmap": [
+            "tests/stubs/OC.php",
+            "tests/stubs/OC_Template.php",
+            "tests/stubs/OC_Util.php"
+        ]
     },
     "config": {
         "sort-packages": true,
@@ -24,6 +39,10 @@
     },
     "scripts": {
         "lint": "php-cs-fixer fix --dry-run --diff",
-        "lint:fix": "php-cs-fixer fix"
+        "lint:fix": "php-cs-fixer fix",
+        "ocp": "scripts/ocp.sh",
+        "test": "phpunit --configuration phpunit.xml --testsuite Unit",
+        "stan": "phpstan analyse --memory-limit=1G --no-progress",
+        "test:contract": "phpunit --configuration phpunit.xml --testsuite Contract"
     }
 }

@@ -8,22 +8,25 @@
       xsi:noNamespaceSchemaLocation="https://apps.owncloud.com/schema/apps/info.xsd">
 	<id>oco_synaplan</id>
 	<name>Synaplan Integration</name>
-	<summary>AI-powered document summarization, translation, knowledge base, and chat</summary>
+	<summary>Summaries, translations, chat and AI search for your files, powered by Synaplan</summary>
 	<description>
-Bring Synaplan's AI capabilities directly into owncloud.online:
+Bring Synaplan's AI capabilities directly into ownCloud.online:
 
 - Summarize documents with one click
 - Translate files to multiple languages
-- Add to Knowledge — vectorize files into the AI knowledge base
-- Research Chat — AI assistant with knowledge group and model selection,
+- Make searchable by AI — let Synaplan answer from your files
+- Files from Synaplan — copies sent from Synaplan land in your files, and
+  New → From Synaplan… adds Synaplan files to the folder you are in
+- Research Chat — AI assistant with knowledge folder and model selection,
   optional personal memories, and live status (model, language, image/video)
 - Configurable answer language — set a default and optionally follow each
   user's interface language
-- Optional per-user Synaplan accounts with an "Activate AI" consent gate
+- Each person connects their own Synaplan account, gets one created by the
+  administrator, or everyone shares one account
 
-Requires a running Synaplan instance and API key.
+Requires a running Synaplan server.
 	</description>
-	<version>1.0.0</version>
+	<version>2.0.0</version>
 	<licence>Apache-2.0</licence>
 	<author mail="info@synaplan.com" homepage="https://synaplan.com">Synaplan</author>
 	<namespace>OcoSynaplan</namespace>
@@ -38,10 +41,21 @@ Requires a running Synaplan instance and API key.
 	</dependencies>
 	<settings>
 		<admin>OCA\OcoSynaplan\Settings\Admin</admin>
+		<personal>OCA\OcoSynaplan\Settings\Personal</personal>
 	</settings>
 	<settings-sections>
 		<admin>OCA\OcoSynaplan\Settings\Section</admin>
+		<personal>OCA\OcoSynaplan\Settings\Section</personal>
 	</settings-sections>
+	<repair-steps>
+		<post-migration>
+			<step>OCA\OcoSynaplan\Migration\MigrateSettings</step>
+		</post-migration>
+	</repair-steps>
+	<background-jobs>
+		<job>OCA\OcoSynaplan\BackgroundJob\AdoptIdentitiesJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\RefreshNotifyKeysJob</job>
+	</background-jobs>
 	<navigation>
 		<name>Synaplan</name>
 		<route>oco_synaplan.page.research</route>

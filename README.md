@@ -1,7 +1,6 @@
 # Synaplan Integration for ownCloud.online
 
-AI-powered document summarization, translation, knowledge base, and research
-chat — directly in BW-Tech
+Summaries, translations, chat and AI search for your files — directly in BW-Tech
 [ownCloud.online](https://github.com/BWTECH-github/owncloud.online) 11.0.10. It
 talks to the **Synaplan backend API**.
 
@@ -10,21 +9,41 @@ talks to the **Synaplan backend API**.
 - **Summarize** — generate document summaries from the file context menu
   (bullet points, paragraph, or key sentences; adjustable length and language).
 - **Translate** — translate files to another language from the context menu.
-- **Add to Knowledge** — upload files to the Synaplan RAG knowledge base for
-  semantic search and chat, with group selection and in-place updates.
+- **Make searchable by AI** — send a file to Synaplan so the AI can find it
+  when you ask a question; pick the knowledge folder, update it after the file
+  changes, or remove it again.
 - **Research Chat** — a full-page AI assistant **and** a floating in-page
   launcher, with knowledge-group and model selection, streaming answers, and
   optional personal memories. `/pic` and `/vid` generate images and videos when
-  the corresponding models are configured, with one-click "Save to Files".
+  the corresponding models are configured, with one-click "Save to Files"
+  into the folder for the file's kind.
+- **Copies from Synaplan** — *Copy to cloud* in Synaplan saves a file into the
+  person's files: under `Synaplan/`, in a folder for its kind (Documents,
+  Images, Audio, Video, Calendar), or under a folder they choose in
+  Settings → Personal → Synaplan. Their next page says what was copied where,
+  with a link to the file.
+- **New → From Synaplan…** in Files adds files from Synaplan, the ones it made
+  first, to the open folder.
 - **Configurable answer language** — set a default and optionally follow each
   user's ownCloud.online interface language.
-- **Per-user Synaplan accounts** — optional mode where each user activates AI
-  once (consent gate) and gets an isolated, provisioned Synaplan account/key.
+- **How people use Synaplan** — the administrator picks one of the modes the
+  Nextcloud app offers: *Connect your Synaplan account* (each person connects
+  an account they already have), *Accounts created by the administrator* (this
+  server creates a Synaplan account per person) or *One shared account*.
+  *Organisation login* is not available on ownCloud.online. With a personal
+  account, each person agrees once before anything is sent to Synaplan.
+- Summarize, Translate and Make searchable by AI appear only on files Synaplan
+  can read; failures say what happened and where to fix it.
 
 ## Requirements
 
-- BW-Tech ownCloud.online 11.0.10 (PHP 8.4)
-- A running [Synaplan](https://synaplan.com) instance with a valid API key
+- BW-Tech ownCloud.online 11.0.10 or a newer 11.0 release (PHP 8.4)
+- A running [Synaplan](https://synaplan.com) 5.8 or newer: an API key for one
+  shared account, an administrator's API key to create accounts, and for
+  connected accounts a registration of this server (see Configuration)
+- A memory cache (`memcache.local`, for example APCu). The app keeps its limit
+  on the notices Synaplan sends in it; without one, ownCloud.online gives it a
+  cache that keeps nothing.
 
 ## Installation
 
@@ -34,7 +53,7 @@ talks to the **Synaplan backend API**.
 git clone https://github.com/metadist/synaplan-owncloud-online.git
 cd synaplan-owncloud-online
 
-make deps          # composer install + npm install
+make deps          # composer install + npm ci
 make build         # build the frontend bundles into js/
 
 # Symlink into your ownCloud.online apps dir and enable it
@@ -53,19 +72,234 @@ make package       # produces oco_synaplan.tar.gz
 
 1. Go to **Settings → Admin → Synaplan**.
 2. Pick the active backend (**Live** or **Local**) and enter the Synaplan URL
-   and API key.
-3. Click **Test connection** to verify.
-4. Optionally set the default answer language and enable memories / per-user
-   accounts.
+   as this server reaches it, the address people open in the browser when it
+   differs, and the API key.
+3. Choose **How do people here use Synaplan?** and click **Save**.
+4. For *Connect your Synaplan account* or *Accounts created by the
+   administrator*, click **Register this instance** once. With the
+   registration code from the Synaplan administrator it is active at once;
+   without one it may wait for their approval.
+5. Click **Test connection** to verify, and optionally set the default answer
+   language and memories.
+
+Connected people manage their connection under **Settings → Personal →
+Synaplan**.
+
+### When the administrator changes a person
+
+Once this server is registered, Synaplan hears about it:
+
+- **Deleting** a person ends their connection. An account this server created
+  for them is deleted too, unless they also use it elsewhere (another cloud,
+  or a password of their own). An account a person connected stays theirs.
+- **Disabling** a person pauses them in Synaplan; **enabling** them resumes
+  the same connection or account.
+- **Deactivate** under **AI Users** pauses a person whose account this server
+  created; when they choose **Use Synaplan** again, the same account and key
+  resume, and when they connect their own Synaplan account instead, it
+  replaces that one. A connected person's grant is revoked, and they connect
+  again.
+
+Accounts this server created before it registered are moved onto the
+registration by an hourly background job, once per registration, so these
+rules reach them too. Background jobs run with cron (`occ system:cron`).
+
+### Copies from Synaplan
+
+The registration tells Synaplan where to send copies: this server's
+`/index.php/apps/oco_synaplan/api/v1/inbound`. When Synaplan reaches this
+server at another address, for example an internal one, enter it under
+**Address Synaplan uses to reach this ownCloud.online** and save. Synaplan
+must be able to reach it. Links to a copied file, in Synaplan and in the
+person's notice, use the address people open instead: `overwrite.cli.url` in
+`config.php`, which ownCloud.online sets when it is installed.
+
+Each notice from Synaplan is signed. The app checks it against Synaplan's
+published keys, which an hourly background job refreshes, and ignores a
+notice that is not for this server or was already seen. A person whose
+connection ended in Synaplan is asked to connect again on their next action.
 
 ## Development
 
+PHP 8.4 with Composer, and Node 26 with npm 11, on the host.
+
 ```bash
-make build         # production frontend build (js/)
+make deps          # composer install + npm ci
+make build         # production frontend build (js/, not committed)
 make dev           # rebuild on change (watch)
-make check-types   # vue-tsc type check
-make lint          # php-cs-fixer + vue-tsc
+make format        # fix the PHP code style, format the frontend
+make l10n          # write l10n/<locale>.js after editing l10n/<locale>.json
+make ci-local      # every CI job except e2e — run before each commit
 ```
+
+The app ships English, German (`de` informal, `de_DE` formal), Spanish,
+French and Turkish. A string added to `t()` is translated in every
+`l10n/<locale>.json` in the same change; the locale test in Vitest fails
+otherwise.
+
+`make ci-local` runs php-cs-fixer, ESLint, Prettier, PHPStan, PHPUnit, the
+contract test, the contract-fixture check, vue-tsc, Vitest, the build, and
+the package with its tarball check. **All Checks Passed** in
+`.github/workflows/ci.yml` is the merge gate; CI runs the PHP checks and the
+e2e journeys on `v11.0.10` and `v11.0.29`.
+
+### Tests
+
+| Target | Runs |
+| --- | --- |
+| `make test` | PHPUnit (`tests/Unit`) against the OCP of `OCO_TAG`, which `scripts/ocp.sh` fetches into `.cache/` |
+| `make stan` | PHPStan at the level in `phpstan.neon`, no baseline |
+| `make test-unit-js` | Vitest (`tests/unit`) |
+| `make test-contract` | every call the app makes, checked against the OpenAPI spec and routes of the Synaplan image pinned in `ci.yml` (`SYNAPLAN_IMAGE_DIGEST`) and against the cloud-apps contract in `tests/fixtures/synaplan-contract/` |
+| `make check-contract-fixtures` | the vendored contract fixtures are, byte for byte, the pinned Synaplan's |
+| `make e2e-up test-e2e e2e-down` | the Playwright journeys (`tests/e2e`) |
+
+The contract fixtures come from the commit the pinned image was built from
+(`make contract-fixtures SYNAPLAN_DIR=/path/to/synaplan`) and are never
+edited by hand. A call the pinned Synaplan does not describe is a gap to
+raise with Synaplan, not a hand-written exception.
+
+The journeys need the BW-Tech checkout of `make dev-server` and a
+[metadist/synaplan](https://github.com/metadist/synaplan) checkout in
+`SYNAPLAN_DIR` (default `../synaplan`) for its test stack, at the commit of
+the pinned image (its `org.opencontainers.image.revision` label).
+`make e2e-up` starts that stack with the pinned image on `:8001` and the dev
+stack on `:8083`. The global setup gives the app an admin API key, the mode
+*Connect your Synaplan account* and a registration of this server; the
+journeys then sign in as Ada, Carol and the admin. `npx playwright install
+chromium` once fetches the browser. `make e2e-down` deletes both stacks'
+data. `OCO_URL` and `E2E_SYNAPLAN_URL` move the journeys to other ports;
+point `E2E_SYNAPLAN_URL` only at a Synaplan test stack, since the journeys
+create keys and register this server there.
+
+### Next to the Nextcloud app
+
+This repo and [synaplan-nextcloud](https://github.com/metadist/synaplan-nextcloud)
+run on one machine at the same time, against one Synaplan test stack:
+
+| | ownCloud.online | Nextcloud |
+| --- | --- | --- |
+| Dev stack | :8083, Compose project `synaplan-owncloud-dev`, containers `synaplan-owncloud-dev*` | :8081, containers `synaplan-nextcloud-dev*` |
+| e2e stack | the dev stack on :8083 | :8091, Compose project `synaplan-nextcloud-e2e` |
+| Synaplan test stack | shared on :8001 | shared on :8001 |
+
+Each Compose project has its own default network and project-named volumes.
+The Synaplan test stack has fixed container names and host ports, so only one
+runs: whichever repo starts it owns it, and `make e2e-up` in the other repo
+finds it at `E2E_SYNAPLAN_URL` and uses it. The two e2e overlays set the same
+environment apart from the registration token, and registration is `open`,
+so each app registers its own client either way. Each suite touches only
+what its own server made in Synaplan: the links of its client, host and
+person, and the account it provisions for Carol (here `carol.oco@example.org`).
+
+```bash
+make e2e-up                         # starts the Synaplan test stack, or uses the one that answers on :8001
+make test-e2e                       # meanwhile `make e2e-up test-e2e` in ../synaplan-nextcloud
+E2E_KEEP_SYNAPLAN=1 make e2e-down   # resets ownCloud.online and leaves the shared Synaplan running
+```
+
+`make e2e-down` without `E2E_KEEP_SYNAPLAN=1` also removes the Synaplan test
+stack when this repo started it; a stack the other repo started is left
+alone, as Compose only removes its own project. The registration token is
+single-use, so on a kept stack the journeys register this server again
+without it. Synaplan allows a registered client 30 updates an hour, and each
+saved admin setting is one, so the global setup clears those counters in the
+test stack's Redis (`synaplan-redis-test`; `SYNAPLAN_REDIS_CONTAINER` names
+another) before each run. The provisioning journeys delete only Synaplan
+accounts this ownCloud.online created, whose every identity belongs to an
+ownCloud.online instance on this host. They read that in the test stack's
+database through `synaplan-app-test` (`SYNAPLAN_APP_CONTAINER` names another)
+and delete nothing when that container and `E2E_SYNAPLAN_URL` are different
+stacks.
+
+`make e2e-up` installs the dev stack with `DEV_SYNAPLAN=test`, which points
+the app at the test stack. After `make test-e2e` the app stays registered
+there with an API key, so Ada (`ada` / `ada-dev-pass`) can connect and try
+it by hand next to Nextcloud. The addresses are written at install time, so
+an existing install switches with fresh volumes:
+
+```bash
+make dev-reset dev-up DEV_SYNAPLAN=test
+```
+
+A dev stack started before it had its own Compose project name runs under
+the checkout's folder name, with the same container names. Stop it once with
+`docker compose -p <folder> -f docker-compose.dev.yml down` (add `-v` to
+delete its data) before `make dev-up`.
+
+Journeys that need `occ` run it in `OCO_CONTAINER` (default
+`synaplan-owncloud-dev`).
+
+### Test switches
+
+App values the journeys set and the UI never shows. Each is off unless it is
+`1`.
+
+| Switch | When on |
+| --- | --- |
+| `dev_hold_inbound` | A copy from Synaplan is written, but its result waits: Synaplan shows it as still copying until the switch is deleted and the next cron run reports it |
+
+```bash
+make dev-occ CMD="config:app:set oco_synaplan dev_hold_inbound --value 1"
+make dev-occ CMD="config:app:delete oco_synaplan dev_hold_inbound"
+```
+
+### Local ownCloud.online stack
+
+There is no official image of BW-Tech's ownCloud.online. The dev stack runs a
+checkout of [BWTECH-github/owncloud.online](https://github.com/BWTECH-github/owncloud.online)
+in a PHP 8.4 / Apache container (`docker/Dockerfile.dev`, with the PHP
+extensions of BW-Tech's release workflow), with MariaDB 10.11 and a cron
+container that runs `php occ system:cron` every 60 seconds.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OCO_SERVER_PATH` | `../owncloud.online` | the BW-Tech checkout, mounted at `/var/www/html` |
+| `OCO_TAG` | `v11.0.10` | the tag the checkout must be at; CI also runs the newest `v11.0.*` (`v11.0.29`) |
+| `SYNAPLAN_URL_LOCAL` | `http://host.docker.internal:8000` | the Synaplan API as the container reaches it, written on first install |
+| `SYNAPLAN_PUBLIC_URL_LOCAL` | empty (the address above) | the Synaplan address people's browsers open, written on first install |
+| `SYNAPLAN_DELIVERY_URL` | `http://host.docker.internal:8083/index.php/apps/oco_synaplan/api/v1/inbound` | where Synaplan's containers send copies, written on first install |
+| `DEV_SYNAPLAN` | `dev` | `test` sets both addresses to the Synaplan test stack at `E2E_SYNAPLAN_URL` (see *Next to the Nextcloud app*) |
+
+```bash
+make dev-server        # git clone --depth 1 --branch $OCO_TAG …/owncloud.online.git $OCO_SERVER_PATH,
+                       # or fetch and check out the tag in an existing checkout
+cp docker-compose.dev.yml.example docker-compose.dev.yml
+make dev-up            # build, install on first start, seed, check status.php and the app
+make dev-occ CMD="user:list"
+make dev-logs          # Apache and cron output
+make dev-shell         # a shell as www-data
+make dev-down          # stop, keep the data
+make dev-reset         # delete config, data and database; the checkout is untouched
+
+OCO_TAG=v11.0.29 make dev-server dev-reset dev-up   # another version needs fresh volumes
+```
+
+The first start runs `composer install --no-dev` in the checkout (a git
+checkout has no `lib/composer`), installs ownCloud.online, creates `admin` /
+`admin` and the test people `ada`, `bob` and `carol` (password
+`<name>-dev-pass`; Carol's address is `carol.oco@example.org`), enables the
+app and points it at `SYNAPLAN_URL_LOCAL`. `make dev-up` then gives Ada the
+folders `Specs`, `Incoming-DE`, `Incoming-EN`, `Reports`, `Invoices`,
+`Exports`, `Projects/Q3` and `HR/Contracts`, and shares `Incoming-DE` (edit)
+and `Specs` (read) with Bob. The stack is ready when
+`http://localhost:8083/status.php` reports `"installed":true` with the
+version of `OCO_TAG` and `oco_synaplan` is enabled; both are checked by
+`make dev-up`.
+
+The app repository is mounted over `apps/oco_synaplan` of the checkout, so a
+`make build` is live on the next page load. The stack has its own Docker
+network. Synaplan's containers reach it on the Docker host, so the first
+install sets the address Synaplan uses to reach it to
+`SYNAPLAN_DELIVERY_URL`, and the journeys set it again; links to copies keep
+`http://localhost:8083` (`overwrite.cli.url`). Every start sets
+`memcache.local` to APCu.
+
+ownCloud.online adds an app's background jobs when it installs or upgrades
+the app, not on `app:enable`. A dev stack installed with an older version of
+the app gets new jobs with fresh volumes (`make dev-reset dev-up`) or with
+`make dev-occ CMD="config:app:set oco_synaplan installed_version --value 0"`
+followed by `make dev-occ CMD="upgrade"`.
 
 The frontend is built as self-contained IIFE bundles (Vue 3 bundled) because
 ownCloud.online loads app scripts as classic `<script>` tags. Entry points:
@@ -76,6 +310,12 @@ ownCloud.online loads app scripts as classic `<script>` tags. Entry points:
 | `chat-launcher.js`  | Files app                          | Floating chat launcher button            |
 | `research.js`       | `/apps/oco_synaplan/research` page | Full-page research chat                  |
 | `settings.js`       | Admin → Synaplan section           | Admin settings panel                     |
+| `personal-settings.js` | Personal → Synaplan section     | Connect, disconnect and the connection state |
+
+`public/link-return.html` is the page Synaplan sends a person back to after
+connecting. It forwards to the callback from this server's own origin, because
+the session passphrase cookie of ownCloud.online is `SameSite=Strict` and would
+not travel on a redirect from Synaplan (see `docs/CF-S4.md`).
 
 ## Architecture
 

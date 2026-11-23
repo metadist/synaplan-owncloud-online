@@ -1,0 +1,34 @@
+{
+  "description": "Synaplan routes the cloud apps call with a person's API key, and the scopes that grant each one (any of the listed). Placeholders: {id} a file id, {path} a stored upload path.",
+  "apps": ["nextcloud", "owncloud"],
+  "keyScopes": ["chat", "files", "rag", "memories", "cloud:watch"],
+  "paths": [
+    { "method": "POST", "path": "/api/v1/summary/generate", "scopes": ["chat"] },
+    { "method": "POST", "path": "/v1/chat/completions", "scopes": ["chat"] },
+    { "method": "POST", "path": "/api/v1/media/generate", "scopes": ["chat"] },
+    { "method": "GET", "path": "/api/v1/config/memory-service/check", "scopes": ["chat", "memories"] },
+    { "method": "GET", "path": "/api/v1/config/models", "scopes": ["chat"] },
+    { "method": "POST", "path": "/api/v1/chats", "scopes": ["chat"] },
+    { "method": "POST", "path": "/api/v1/rag/search", "scopes": ["rag"] },
+    { "method": "POST", "path": "/api/v1/user/memories/search", "scopes": ["memories"] },
+    { "method": "GET", "path": "/api/v1/files/groups", "scopes": ["files"] },
+    { "method": "POST", "path": "/api/v1/files/upload", "scopes": ["files"] },
+    { "method": "POST", "path": "/api/v1/files/check-stale", "scopes": ["files"] },
+    { "method": "GET", "path": "/api/v1/files/{id}/content", "scopes": ["files"] },
+    { "method": "DELETE", "path": "/api/v1/files/{id}", "scopes": ["files"] },
+    { "method": "GET", "path": "/api/v1/files/uploads/{path}", "scopes": ["files"] },
+    { "method": "POST", "path": "/api/v1/cloud/status", "scopes": ["files"] },
+    { "method": "GET", "path": "/api/v1/cloud/files/{id}", "scopes": ["files"] },
+    { "method": "GET", "path": "/api/v1/cloud/watches", "scopes": ["cloud:watch"] },
+    { "method": "POST", "path": "/api/v1/cloud/watches", "scopes": ["cloud:watch"] },
+    { "method": "GET", "path": "/api/v1/cloud/watches/options", "scopes": ["cloud:watch"] },
+    { "method": "PATCH", "path": "/api/v1/cloud/watches/{id}", "scopes": ["cloud:watch"] },
+    { "method": "DELETE", "path": "/api/v1/cloud/watches/{id}", "scopes": ["cloud:watch"] },
+    { "method": "POST", "path": "/api/v1/cloud/watches/{id}/files", "scopes": ["cloud:watch"] },
+    { "method": "POST", "path": "/api/v1/cloud/watches/{id}/reconcile", "scopes": ["cloud:watch"] },
+    { "method": "POST", "path": "/api/v1/cloud/trials", "scopes": ["cloud:watch"] }
+  ],
+  "anyKey": [
+    { "method": "GET", "path": "/api/health" }
+  ]
+}

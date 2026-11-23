@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { api } from '../shared/api'
+import { failureFromError, type Failure } from '../shared/failures'
 import { renderMarkdown } from '../shared/markdown'
 import { LANGUAGES } from '../shared/languages'
 import { translate as t } from '../shared/oc'
+import FailureNote from './FailureNote.vue'
 
 const props = defineProps<{
   fileId: number
@@ -17,18 +19,18 @@ const summaryType = ref<'bullet-points' | 'abstractive' | 'extractive'>('bullet-
 const length = ref<'short' | 'medium' | 'long'>('medium')
 const language = ref(props.defaultLanguage || 'en')
 const loading = ref(false)
-const error = ref('')
+const failure = ref<Failure | null>(null)
 const resultHtml = ref('')
 
 async function run(): Promise<void> {
   loading.value = true
-  error.value = ''
+  failure.value = null
   resultHtml.value = ''
   try {
     const res = await api.summarize(props.fileId, summaryType.value, length.value, language.value)
     resultHtml.value = renderMarkdown(res.summary || '')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    failure.value = failureFromError(e)
   } finally {
     loading.value = false
   }
@@ -65,14 +67,12 @@ async function run(): Promise<void> {
       </div>
     </template>
 
-    <div v-if="loading" class="oco-loading">
-      <span class="oco-spinner" /> {{ t('Generating summary…') }}
-    </div>
+    <div v-if="loading" class="oco-loading"><span class="oco-spinner" /> {{ t('Generating summary…') }}</div>
 
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div v-if="resultHtml" class="oco-result" v-html="resultHtml" />
 
-    <p v-if="error" class="oco-error">{{ error }}</p>
+    <FailureNote :failure="failure" />
 
     <div class="oco-actions">
       <button class="oco-btn" @click="emit('close')">{{ resultHtml ? t('Close') : t('Cancel') }}</button>

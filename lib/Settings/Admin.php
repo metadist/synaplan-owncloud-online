@@ -30,6 +30,7 @@ class Admin implements ISettings
     {
         // Added here (before the settings page response is rendered) so the
         // Vue mount script is emitted into the page head.
+        Util::addTranslations(Application::APP_ID);
         Util::addScript(Application::APP_ID, 'settings');
 
         return new Template(Application::APP_ID, 'settings/admin');

@@ -13,33 +13,54 @@ declare(strict_types=1);
  */
 
 use OCA\OcoSynaplan\AppInfo\Application;
-use OCA\OcoSynaplan\Service\SynaplanConfig;
-use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Listener\UserDeletedListener;
+use OCA\OcoSynaplan\Listener\UserEnabledListener;
+use OCA\OcoSynaplan\Notification\CopyNotifier;
+use OCA\OcoSynaplan\Service\Notices;
+use OCP\IUser;
 use OCP\Util;
+use Symfony\Component\EventDispatcher\GenericEvent;
 
 $app = new Application();
 $container = $app->getContainer();
 
-// Inject the file-action + floating chat-launcher scripts into the Files app.
-// ownCloud.online's Files ViewController dispatches this event when it renders,
-// which scopes our scripts to the Files UI instead of loading them on every page.
+// The file actions belong to the Files app: its ViewController dispatches this
+// event when it renders. Each script's translations are added before it,
+// because scripts run in the order they are added.
 $dispatcher = \OC::$server->getEventDispatcher();
 $dispatcher->addListener('OCA\Files::loadAdditionalScripts', function () {
+    Util::addTranslations(Application::APP_ID);
     Util::addScript(Application::APP_ID, 'files-init');
-    Util::addScript(Application::APP_ID, 'chat-launcher');
 });
 
-// Per-user mode: when a user is removed, delete their provisioned Synaplan
-// account too so no orphaned external data lingers. Best-effort — the service
-// never throws, so it cannot block ownCloud.online's own user deletion. Uses
-// preDelete so the uid -> Synaplan-account mapping is still readable.
-\OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function ($user) use ($container) {
-    /** @var SynaplanConfig $config */
-    $config = $container->query(SynaplanConfig::class);
-    if (!$config->isPerUserAccountsEnabled()) {
-        return;
+// The chat launcher is on every page a signed-in person opens, and so are
+// the notices of copies saved while the person was away.
+$signedIn = \OC::$CLI ? null : \OC::$server->getUserSession()->getUser();
+if ($signedIn !== null) {
+    Util::addTranslations(Application::APP_ID);
+    Util::addScript(Application::APP_ID, 'chat-launcher');
+    if ($container->query(Notices::class)->hasPending($signedIn->getUID())) {
+        Util::addScript(Application::APP_ID, 'notices');
     }
-    /** @var UserAccountService $accounts */
-    $accounts = $container->query(UserAccountService::class);
-    $accounts->deleteRemoteAccount($user->getUID());
+}
+
+// The sentences of this app's notifications, where the notifications app is installed.
+\OC::$server->getNotificationManager()->registerNotifier(
+    static fn () => $container->query(CopyNotifier::class),
+    static fn () => ['id' => Application::APP_ID, 'name' => 'Synaplan'],
+);
+
+// Synaplan hears when a person here is deleted, disabled or enabled again.
+\OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function (IUser $user) use ($container) {
+    /** @var UserDeletedListener $listener */
+    $listener = $container->query(UserDeletedListener::class);
+    $listener->handle($user);
+});
+$dispatcher->addListener('OC\User\User::postSetEnabled', function ($event) use ($container) {
+    $user = $event instanceof GenericEvent ? $event->getSubject() : null;
+    if ($user instanceof IUser) {
+        /** @var UserEnabledListener $listener */
+        $listener = $container->query(UserEnabledListener::class);
+        $listener->handle($user);
+    }
 });

@@ -35,6 +35,7 @@ class PageController extends Controller
      */
     public function research(): TemplateResponse
     {
+        Util::addTranslations(Application::APP_ID);
         Util::addScript(Application::APP_ID, 'research');
 
         return new TemplateResponse(Application::APP_ID, 'research');

@@ -1,0 +1,26 @@
+# Extra compose file for the Synaplan test stack, used with the synaplan
+# repo's docker-compose.test.yml at the revision of the pinned image:
+#
+#   docker compose -f docker-compose.test.yml -f docker-compose.test.ci.yml \
+#     -f <this repo>/tests/e2e/synaplan-test-stack.yml up -d --wait
+#
+# This ownCloud.online registers as Synaplan's OAuth2 client with the initial
+# access token below, so it is active without an administrator's approval.
+#
+# Synaplan's backend/.env.test carries placeholder Stripe keys, which switch
+# billing on and keep API keys from accounts below a paid plan. Provisioning
+# runs against a self-hosted Synaplan, where billing is off, so the e2e stack
+# clears the key to match.
+
+services:
+  app_test:
+    environment:
+      STRIPE_SECRET_KEY: ''
+      CLOUD_FILES_ENABLED: 'true'
+      # The suite registers this ownCloud.online itself and expects the
+      # client to be active. People still consent one by one. The token
+      # is what the setup sends, and it approves that one registration;
+      # open registration takes the ones after it, and the Nextcloud
+      # app's on the same stack.
+      PLATFORM_LINKS_REGISTRATION: open
+      PLATFORM_LINKS_REGISTRATION_TOKEN: owncloud-e2e-initial-access-token-0001

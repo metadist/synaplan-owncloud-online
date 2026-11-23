@@ -1,0 +1,3 @@
+# Vendored byte for byte from metadist/synaplan (scripts/vendor-contract.sh).
+/tests/fixtures/synaplan-contract/** -text
+/tests/fixtures/synaplan-contract.sha256 -text

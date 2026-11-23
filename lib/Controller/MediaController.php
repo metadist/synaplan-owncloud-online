@@ -12,12 +12,15 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Http\RespondsToFailures;
+use OCA\OcoSynaplan\Service\CopyDelivery;
 use OCA\OcoSynaplan\Service\SynaplanClient;
+use OCA\OcoSynaplan\Service\SynaplanFolders;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataDownloadResponse;
 use OCP\AppFramework\Http\JSONResponse;
-use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\ILogger;
 use OCP\IRequest;
@@ -28,31 +31,14 @@ use OCP\IUserSession;
  */
 class MediaController extends Controller
 {
-    private const SYNAPLAN_FOLDER = 'Synaplan';
-
-    /**
-     * Map a file extension to a kind sub-folder under {@see self::SYNAPLAN_FOLDER}
-     * so saved artifacts are organised (Documents/Audio/Calendar/Images/Video).
-     * Unknown extensions land directly in the Synaplan root folder.
-     */
-    private const KIND_FOLDERS = [
-        'docx' => 'Documents', 'doc' => 'Documents', 'pptx' => 'Documents',
-        'ppt' => 'Documents', 'xlsx' => 'Documents', 'xls' => 'Documents',
-        'csv' => 'Documents', 'pdf' => 'Documents', 'txt' => 'Documents',
-        'md' => 'Documents', 'odt' => 'Documents', 'rtf' => 'Documents',
-        'mp3' => 'Audio', 'wav' => 'Audio', 'ogg' => 'Audio',
-        'm4a' => 'Audio', 'flac' => 'Audio', 'aac' => 'Audio',
-        'ics' => 'Calendar',
-        'png' => 'Images', 'jpg' => 'Images', 'jpeg' => 'Images',
-        'gif' => 'Images', 'webp' => 'Images', 'svg' => 'Images',
-        'mp4' => 'Video', 'webm' => 'Video', 'mov' => 'Video', 'mkv' => 'Video',
-    ];
+    use RespondsToFailures;
 
     public function __construct(
         IRequest $request,
         private SynaplanClient $synaplanClient,
         private IRootFolder $rootFolder,
         private IUserSession $userSession,
+        private SynaplanFolders $folders,
         private ILogger $logger,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -97,20 +83,13 @@ class MediaController extends Controller
                 'model' => $result['model'] ?? 'unknown',
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('Media generation failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Media generation failed');
         }
     }
 
     /**
-     * Download generated media from Synaplan and save it to the user's ownCloud.online files.
+     * Save a generated file from Synaplan where copies from Synaplan land:
+     * the person's chosen folder or Synaplan, in the sub-folder for its kind.
      *
      * @NoAdminRequired
      */
@@ -131,52 +110,33 @@ class MediaController extends Controller
         $mediaUrl = trim((string) ($data['mediaUrl'] ?? ''));
         $filename = trim((string) ($data['filename'] ?? ''));
 
-        if ($mediaUrl === '' || $filename === '') {
+        if ($mediaUrl === '' || $filename === '' || !SynaplanClient::isSynaplanPath($mediaUrl)) {
             return new JSONResponse(
                 ['success' => false, 'error' => 'mediaUrl and filename are required'],
                 Http::STATUS_BAD_REQUEST,
             );
         }
 
-        $filename = basename($filename);
+        $filename = SynaplanFolders::fileName($filename);
+        $uid = $user->getUID();
 
         try {
-            $content = $this->synaplanClient->downloadFile($mediaUrl);
-
-            $userFolder = $this->rootFolder->getUserFolder($user->getUID());
-
-            $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-            $kindFolder = self::KIND_FOLDERS[$ext] ?? null;
-            $targetFolderPath = self::SYNAPLAN_FOLDER . ($kindFolder !== null ? '/' . $kindFolder : '');
-
-            $targetFolder = $this->ensureFolder($userFolder, $targetFolderPath);
-
-            $counter = 1;
-            $base = pathinfo($filename, PATHINFO_FILENAME);
-            $targetName = $filename;
-
-            while ($targetFolder->nodeExists($targetName)) {
-                $targetName = $base . ' (' . $counter . ')' . ($ext !== '' ? '.' . $ext : '');
-                $counter++;
-            }
-
-            $file = $targetFolder->newFile($targetName);
-            $file->putContent($content);
-
-            $savedPath = $targetFolderPath . '/' . $targetName;
-
-            return new JSONResponse(['success' => true, 'path' => $savedPath, 'folder' => $targetFolderPath]);
+            $content = $this->synaplanClient->downloadFile($mediaUrl, CopyDelivery::MAX_BYTES);
         } catch (\Exception $e) {
-            $this->logger->error('Media save failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => 'Failed to save file: ' . $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Media save failed');
         }
+
+        try {
+            $userFolder = $this->rootFolder->getUserFolder($uid);
+            $file = SynaplanFolders::write($this->folders->kindFolder($userFolder, $uid, $filename), $filename, $content);
+        } catch (\Throwable $e) {
+            return $this->failed(FailureException::fromWrite($e), 'Media save failed');
+        }
+
+        $path = ltrim((string) ($userFolder->getRelativePath($file->getPath()) ?? $file->getName()), '/');
+        $folder = dirname($path);
+
+        return new JSONResponse(['success' => true, 'path' => $path, 'folder' => $folder === '.' ? '' : $folder]);
     }
 
     /**
@@ -187,7 +147,7 @@ class MediaController extends Controller
      */
     public function proxy(string $url = ''): Http\Response
     {
-        if ($url === '') {
+        if ($url === '' || !SynaplanClient::isSynaplanPath($url)) {
             return new JSONResponse(['error' => 'url parameter is required'], Http::STATUS_BAD_REQUEST);
         }
 
@@ -209,40 +169,7 @@ class MediaController extends Controller
 
             return new DataDownloadResponse($content, $filename, $mimeType);
         } catch (\Exception $e) {
-            $this->logger->error('Media proxy failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(['error' => 'Failed to proxy file'], Http::STATUS_INTERNAL_SERVER_ERROR);
+            return $this->failed($e, 'Media proxy failed');
         }
-    }
-
-    /**
-     * Ensure a (possibly nested, slash-separated) folder path exists under the
-     * given user folder, creating each missing segment, and return the leaf
-     * folder node.
-     */
-    private function ensureFolder(Folder $userFolder, string $path): Folder
-    {
-        $current = $userFolder;
-
-        foreach (explode('/', trim($path, '/')) as $segment) {
-            if ($segment === '') {
-                continue;
-            }
-
-            if ($current->nodeExists($segment)) {
-                $node = $current->get($segment);
-                if (!($node instanceof Folder)) {
-                    throw new \RuntimeException('Path segment is not a folder: ' . $segment);
-                }
-                $current = $node;
-            } else {
-                $current = $current->newFolder($segment);
-            }
-        }
-
-        return $current;
     }
 }

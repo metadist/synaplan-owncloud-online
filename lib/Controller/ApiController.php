@@ -12,11 +12,13 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\SynaplanClient;
+use OCA\OcoSynaplan\Service\UserAccountService;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Controller;
-use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\Files\File;
 use OCP\Files\IRootFolder;
@@ -35,6 +37,8 @@ use OCP\IUserSession;
  */
 class ApiController extends Controller
 {
+    use RespondsToFailures;
+
     /** Max file size for direct text extraction (5 MB). */
     private const MAX_TEXT_FILE_SIZE = 5 * 1024 * 1024;
 
@@ -77,12 +81,14 @@ class ApiController extends Controller
         private IConfig $config,
         private IAppManager $appManager,
         private ILogger $logger,
+        private UserAccountService $userAccounts,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
 
     /**
-     * Client runtime config for the chat UI.
+     * Client runtime config for the chat UI and the consent gate: the answer
+     * language, whether memories work, and how the person uses Synaplan.
      *
      * @NoAdminRequired
      */
@@ -101,14 +107,26 @@ class ApiController extends Controller
 
         $info = $this->appManager->getAppInfo(Application::APP_ID);
 
-        return new JSONResponse([
+        return new JSONResponse(array_merge([
             'success' => true,
-            'version' => is_array($info) ? ($info['version'] ?? '') : '',
+            'version' => is_string($info['version'] ?? null) ? $info['version'] : '',
             'language' => $language,
             'languageName' => $this->languageService->getLanguageName($language),
             'useInterfaceLanguage' => $this->languageService->useInterfaceLanguage(),
             'memory' => $memory,
-        ]);
+            'host' => parse_url($this->synaplanClient->getPublicBaseUrl(), PHP_URL_HOST) ?: '',
+        ], $this->userAccounts->getLinkStatus()));
+    }
+
+    /**
+     * What the Files app offers, as far as it depends on the connected
+     * Synaplan: Translate only where Synaplan translates.
+     *
+     * @NoAdminRequired
+     */
+    public function features(): JSONResponse
+    {
+        return new JSONResponse(['translation' => $this->synaplanClient->offersTranslation()]);
     }
 
     /**
@@ -141,18 +159,8 @@ class ApiController extends Controller
                 'summary' => $result['summary'] ?? '',
                 'metadata' => $result['metadata'] ?? null,
             ]);
-        } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
         } catch (\Exception $e) {
-            $this->logger->error('Summarization failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Summarization failed');
         }
     }
 
@@ -173,26 +181,36 @@ class ApiController extends Controller
 
             $text = $this->extractFileText($fileId);
 
-            $result = $this->synaplanClient->summarize($text, 'abstractive', 'long', $targetLanguage);
+            $result = $this->synaplanClient->translate($text, $targetLanguage);
 
             return new JSONResponse([
                 'success' => true,
                 'translation' => $result['summary'] ?? '',
-                'metadata' => $result['metadata'] ?? null,
+                'metadata' => $this->translationMetadata($result, $targetLanguage),
             ]);
-        } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
         } catch (\Exception $e) {
-            $this->logger->error('Translation failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Translation failed');
         }
+    }
+
+    /**
+     * What the browser may show about a translation. Synaplan's own details
+     * describe a summary (type, focus, compression) and stay on the server.
+     *
+     * @param array<string, mixed> $result
+     * @return array<string, string>
+     */
+    private function translationMetadata(array $result, string $targetLanguage): array
+    {
+        $metadata = is_array($result['metadata'] ?? null) ? $result['metadata'] : [];
+        $out = ['target_language' => $targetLanguage];
+        foreach (['model', 'provider'] as $key) {
+            if (is_string($metadata[$key] ?? null) && $metadata[$key] !== '') {
+                $out[$key] = $metadata[$key];
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -224,9 +242,7 @@ class ApiController extends Controller
             }
 
             if ($node->getSize() > self::MAX_UPLOAD_FILE_SIZE) {
-                throw new \RuntimeException(
-                    'File too large (max ' . (self::MAX_UPLOAD_FILE_SIZE / 1024 / 1024) . ' MB)',
-                );
+                throw FailureException::fileTooLarge(self::MAX_UPLOAD_FILE_SIZE);
             }
 
             $userFolder = $this->rootFolder->getUserFolder($this->requireUid());
@@ -248,30 +264,26 @@ class ApiController extends Controller
                 true,
             );
 
+            if (($result['success'] ?? false) !== true) {
+                // Synaplan's reason (storage quota, rate limit) tells the person what to do.
+                $reason = (string) ($result['errors'][0]['error'] ?? ($result['error'] ?? ''));
+                throw $reason !== ''
+                    ? FailureException::refusedBySynaplan($reason)
+                    : FailureException::invalidSynaplanAnswer();
+            }
             $fileInfo = $result['files'][0] ?? null;
 
             return new JSONResponse([
-                'success' => $result['success'] ?? false,
+                'success' => true,
                 'filename' => $filename,
                 'groupKey' => $groupKey,
                 'chunksCreated' => $fileInfo['chunks_created'] ?? 0,
                 'vectorized' => $fileInfo['vectorized'] ?? false,
                 'extractedTextLength' => $fileInfo['extracted_text_length'] ?? 0,
                 'overwritten' => $fileInfo['overwritten'] ?? false,
-                'error' => $result['errors'][0]['error'] ?? ($result['error'] ?? null),
             ]);
-        } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
         } catch (\Exception $e) {
-            $this->logger->error('Knowledge upload failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Knowledge upload failed');
         }
     }
 
@@ -298,7 +310,7 @@ class ApiController extends Controller
                 'stale' => $status['stale'],
             ]);
         } catch (NotFoundException $e) {
-            return new JSONResponse(['success' => false, 'error' => 'File not found'], Http::STATUS_NOT_FOUND);
+            return $this->failed($e, 'Knowledge status failed');
         } catch (\Exception $e) {
             // Status is best-effort — the modal still works if it fails.
             $this->logger->info('Knowledge status check failed: {message}', [
@@ -335,19 +347,11 @@ class ApiController extends Controller
                 return new JSONResponse(['success' => true, 'removed' => false]);
             }
 
-            $this->synaplanClient->deleteKnowledgeFile((int) $synaplanFileId);
+            $this->synaplanClient->deleteKnowledgeFile($synaplanFileId);
 
             return new JSONResponse(['success' => true, 'removed' => true]);
         } catch (\Exception $e) {
-            $this->logger->error('Remove from knowledge failed: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage()],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Remove from knowledge failed');
         }
     }
 
@@ -363,15 +367,7 @@ class ApiController extends Controller
 
             return new JSONResponse(['success' => true, 'groups' => $result['groups'] ?? []]);
         } catch (\Exception $e) {
-            $this->logger->error('Failed to fetch groups: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
-            ]);
-
-            return new JSONResponse(
-                ['success' => false, 'error' => $e->getMessage(), 'groups' => []],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
+            return $this->failed($e, 'Failed to fetch groups', ['groups' => []]);
         }
     }
 
@@ -418,22 +414,12 @@ class ApiController extends Controller
                 ],
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('Failed to fetch models: {message}', [
-                'app' => Application::APP_ID,
-                'message' => $e->getMessage(),
+            return $this->failed($e, 'Failed to fetch models', [
+                'models' => [],
+                'imageModels' => [],
+                'videoModels' => [],
+                'capabilities' => ['image' => false, 'video' => false],
             ]);
-
-            return new JSONResponse(
-                [
-                    'success' => false,
-                    'error' => $e->getMessage(),
-                    'models' => [],
-                    'imageModels' => [],
-                    'videoModels' => [],
-                    'capabilities' => ['image' => false, 'video' => false],
-                ],
-                Http::STATUS_INTERNAL_SERVER_ERROR,
-            );
         }
     }
 
@@ -445,7 +431,7 @@ class ApiController extends Controller
      * then returns the extracted text.
      *
      * @throws NotFoundException if file doesn't exist or user has no access
-     * @throws \RuntimeException if file type or size is unsupported
+     * @throws FailureException when the file is too large, empty, of an unsupported type or has no text
      */
     private function extractFileText(int $fileId): string
     {
@@ -456,17 +442,14 @@ class ApiController extends Controller
 
         $mimeType = $node->getMimeType();
 
-        // Text files: read directly
         if ($this->isTextMimeType($mimeType)) {
             if ($node->getSize() > self::MAX_TEXT_FILE_SIZE) {
-                throw new \RuntimeException(
-                    'File too large (max ' . (self::MAX_TEXT_FILE_SIZE / 1024 / 1024) . ' MB)',
-                );
+                throw FailureException::fileTooLarge(self::MAX_TEXT_FILE_SIZE);
             }
 
             $content = $node->getContent();
             if ($content === '') {
-                throw new \RuntimeException('File is empty');
+                throw FailureException::fileEmpty();
             }
 
             return $content;
@@ -475,9 +458,7 @@ class ApiController extends Controller
         // Binary documents: upload to Synaplan for Tika extraction, then fetch text
         if ($this->isBinaryDocumentType($mimeType)) {
             if ($node->getSize() > self::MAX_UPLOAD_FILE_SIZE) {
-                throw new \RuntimeException(
-                    'File too large (max ' . (self::MAX_UPLOAD_FILE_SIZE / 1024 / 1024) . ' MB)',
-                );
+                throw FailureException::fileTooLarge(self::MAX_UPLOAD_FILE_SIZE);
             }
 
             $userFolder = $this->rootFolder->getUserFolder($this->requireUid());
@@ -491,40 +472,32 @@ class ApiController extends Controller
 
             $fileInfo = $uploadResult['files'][0] ?? null;
             if ($fileInfo === null) {
-                $detail = $uploadResult['errors'][0]['error'] ?? ($uploadResult['error'] ?? '');
-                throw new \RuntimeException(
-                    'Upload to Synaplan failed for ' . $node->getName()
-                    . ('' !== $detail ? ': ' . $detail : ''),
-                );
+                // The server's own reason (storage quota, rate limit, …) lets
+                // the person act on it.
+                $detail = (string) ($uploadResult['errors'][0]['error'] ?? ($uploadResult['error'] ?? ''));
+                throw $detail !== ''
+                    ? FailureException::refusedBySynaplan($detail)
+                    : FailureException::invalidSynaplanAnswer();
             }
 
             $synaplanFileId = $fileInfo['id'] ?? null;
             $extractedLength = $fileInfo['extracted_text_length'] ?? 0;
 
             if ($synaplanFileId === null || $extractedLength === 0) {
-                throw new \RuntimeException(
-                    'Could not extract text from ' . $node->getName()
-                        . '. The file may be image-only or password-protected.',
-                );
+                throw FailureException::noText($node->getName());
             }
 
             $contentResult = $this->synaplanClient->getFileContent((int) $synaplanFileId);
             $extractedText = $contentResult['extracted_text'] ?? '';
 
             if ($extractedText === '') {
-                throw new \RuntimeException(
-                    'Could not retrieve extracted text from ' . $node->getName()
-                        . '. The file may be image-only or password-protected.',
-                );
+                throw FailureException::noText($node->getName());
             }
 
             return $extractedText;
         }
 
-        throw new \RuntimeException(
-            'Unsupported file type: ' . $mimeType
-                . '. Supported: text, PDF, DOCX, ODT, XLSX, PPTX.',
-        );
+        throw FailureException::unsupportedType($mimeType);
     }
 
     /**

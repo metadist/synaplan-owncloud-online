@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, type FileGroup } from '../shared/api'
-import { notify, translate as t } from '../shared/oc'
+import { describeFailure, failureFromError, type Failure } from '../shared/failures'
+import { APP_NAME, translate as t } from '../shared/oc'
+import FailureNote from './FailureNote.vue'
 
 const props = defineProps<{
   fileId: number
@@ -11,41 +13,50 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const groups = ref<FileGroup[]>([])
-const groupKey = ref('DEFAULT')
-const newGroup = ref('')
+const folder = ref('DEFAULT')
 const loading = ref(false)
 const busy = ref(false)
-const error = ref('')
-const inKnowledge = ref(false)
+const failure = ref<Failure | null>(null)
+const searchable = ref(false)
 const stale = ref(false)
-const done = ref<null | { chunks: number; overwritten: boolean }>(null)
+const removed = ref(false)
+const done = ref<null | { passages: number; updated: boolean; folder: string }>(null)
+
+const folderName = computed(() => folder.value.trim() || 'DEFAULT')
 
 onMounted(async () => {
   loading.value = true
   try {
     const [g, status] = await Promise.all([api.getGroups(), api.knowledgeStatus(props.fileId)])
     groups.value = g.groups || []
-    inKnowledge.value = status.inKnowledge
+    searchable.value = status.inKnowledge
     stale.value = status.stale
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    failure.value = failureFromError(e)
   } finally {
     loading.value = false
   }
 })
 
-async function upload(): Promise<void> {
+async function makeSearchable(): Promise<void> {
   busy.value = true
-  error.value = ''
-  const target = newGroup.value.trim() !== '' ? newGroup.value.trim() : groupKey.value
+  failure.value = null
   try {
-    const res = await api.uploadToKnowledge(props.fileId, target)
-    if (!res.success) {
-      throw new Error(res.error || t('Upload failed'))
+    const res = await api.uploadToKnowledge(props.fileId, folderName.value)
+    if (!res.success || res.chunksCreated === 0) {
+      failure.value =
+        res.chunksCreated === 0 && res.success
+          ? {
+              text: t(
+                'Synaplan found no text it could make searchable. The file may be empty or a scan. Check the file and try again.',
+              ),
+            }
+          : describeFailure('synaplan_error', res.error ?? undefined)
+      return
     }
-    done.value = { chunks: res.chunksCreated, overwritten: res.overwritten }
+    done.value = { passages: res.chunksCreated, updated: res.overwritten, folder: res.groupKey || folderName.value }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    failure.value = failureFromError(e)
   } finally {
     busy.value = false
   }
@@ -53,13 +64,12 @@ async function upload(): Promise<void> {
 
 async function remove(): Promise<void> {
   busy.value = true
-  error.value = ''
+  failure.value = null
   try {
     await api.removeFromKnowledge(props.fileId)
-    notify(t('Removed from knowledge base'))
-    emit('close')
+    removed.value = true
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    failure.value = failureFromError(e)
   } finally {
     busy.value = false
   }
@@ -68,19 +78,38 @@ async function remove(): Promise<void> {
 
 <template>
   <div class="synaplan-knowledge-modal">
-    <h2>{{ t('Add to Knowledge') }}</h2>
+    <h2>{{ t('Make searchable by AI') }}</h2>
     <p class="oco-sub">{{ fileName }}</p>
 
     <div v-if="loading" class="oco-loading">
-      <span class="oco-spinner" /> {{ t('Checking status…') }}
+      <span class="oco-spinner" />
+    </div>
+
+    <div v-else-if="busy && !searchable" class="oco-loading">
+      <span class="oco-spinner" /> {{ t('Making it searchable') }}
+      <p class="oco-sub">{{ t('Large documents take a little longer.') }}</p>
     </div>
 
     <template v-else-if="done">
       <div class="oco-result">
         <p>
-          <strong>{{ done.overwritten ? t('Updated in knowledge base.') : t('Added to knowledge base.') }}</strong>
+          <strong>{{
+            done.updated ? t('Updated: the AI now uses the latest version') : t('This file is now searchable by AI')
+          }}</strong>
         </p>
-        <p>{{ t('{count} chunks vectorized.', { count: done.chunks }) }}</p>
+        <p>{{ t('Knowledge folder') }}: {{ done.folder }}</p>
+        <p>{{ t('Searchable passages') }}: {{ done.passages }}</p>
+      </div>
+      <div class="oco-actions">
+        <button class="oco-btn primary" @click="emit('close')">{{ t('Done') }}</button>
+      </div>
+    </template>
+
+    <template v-else-if="removed">
+      <div class="oco-result">
+        <p>
+          <strong>{{ t('This file is no longer searchable by AI') }}</strong>
+        </p>
       </div>
       <div class="oco-actions">
         <button class="oco-btn primary" @click="emit('close')">{{ t('Done') }}</button>
@@ -88,29 +117,44 @@ async function remove(): Promise<void> {
     </template>
 
     <template v-else>
-      <p v-if="inKnowledge" class="oco-sub">
-        {{ stale ? t('This file is in the knowledge base but has changed since — re-adding will update it.') : t('This file is already in the knowledge base.') }}
+      <p v-if="stale">
+        {{
+          t('This file changed in {app} after it was made searchable. Update it so the AI uses the latest version.', {
+            app: APP_NAME,
+          })
+        }}
+      </p>
+      <p v-else-if="searchable">
+        {{ t('This file is already searchable by AI. Updating it makes the AI use the latest version.') }}
+      </p>
+      <p v-else>
+        {{ t('The AI can then find this file when you ask a question, here in the chat or in Synaplan.') }}
       </p>
 
       <div class="oco-field">
-        <label>{{ t('Knowledge group') }}</label>
-        <select v-model="groupKey" :disabled="newGroup.trim() !== ''">
-          <option value="DEFAULT">DEFAULT</option>
-          <option v-for="g in groups" :key="g.name" :value="g.name">{{ g.name }} ({{ g.count }})</option>
-        </select>
-      </div>
-      <div class="oco-field">
-        <label>{{ t('or new group') }}</label>
-        <input v-model="newGroup" type="text" :placeholder="t('New group name')" />
+        <label for="synaplan-knowledge-folder">{{ t('Knowledge folder') }}</label>
+        <input
+          id="synaplan-knowledge-folder"
+          v-model="folder"
+          type="text"
+          list="synaplan-knowledge-folders"
+          :placeholder="t('Choose a folder or type a new name…')"
+        />
+        <datalist id="synaplan-knowledge-folders">
+          <option value="DEFAULT" />
+          <option v-for="g in groups" :key="g.name" :value="g.name" />
+        </datalist>
       </div>
 
-      <p v-if="error" class="oco-error">{{ error }}</p>
+      <FailureNote :failure="failure" />
 
       <div class="oco-actions">
-        <button v-if="inKnowledge" class="oco-btn" :disabled="busy" @click="remove">{{ t('Remove') }}</button>
+        <button v-if="searchable" class="oco-btn" :disabled="busy" @click="remove">
+          {{ t('Remove from AI search') }}
+        </button>
         <button class="oco-btn" @click="emit('close')">{{ t('Cancel') }}</button>
-        <button class="oco-btn primary" :disabled="busy" @click="upload">
-          {{ inKnowledge ? t('Update') : t('Add') }}
+        <button class="oco-btn primary" :disabled="busy" @click="makeSearchable">
+          {{ searchable ? t('Update') : t('Make searchable') }}
         </button>
       </div>
     </template>

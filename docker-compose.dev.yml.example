@@ -1,0 +1,95 @@
+# Local BW-Tech ownCloud.online for Synaplan app development.
+#
+# There is no official image: the server is a checkout of
+# https://github.com/BWTECH-github/owncloud.online at the tag in OCO_TAG,
+# in OCO_SERVER_PATH (default ../owncloud.online), run by PHP 8.4 and Apache.
+#
+#   make dev-server                                  # clone or check out OCO_TAG in OCO_SERVER_PATH
+#   cp docker-compose.dev.yml.example docker-compose.dev.yml
+#   make dev-up                                      # v11.0.10, the version the README names
+#   OCO_TAG=v11.0.29 make dev-server dev-reset dev-up  # the newest v11.0.*; a version change needs fresh volumes
+#
+# UI: http://localhost:8083 — admin / admin; ada, bob, carol / <name>-dev-pass.
+# The app reaches Synaplan at SYNAPLAN_URL_LOCAL (default: a Synaplan API
+# published on the Docker host, http://host.docker.internal:8000), and
+# Synaplan sends copies to SYNAPLAN_DELIVERY_URL (default: this server on the
+# Docker host, http://host.docker.internal:8083/...).
+#
+# The app is mounted over apps/oco_synaplan of the checkout. Config and data
+# live in volumes, so `make dev-reset` never touches the checkout.
+#
+# The project name keeps the network and volumes apart from other stacks on
+# the machine, such as the Nextcloud app's, whatever the checkout is called.
+
+name: synaplan-owncloud-dev
+
+x-owncloud: &owncloud
+  image: synaplan-owncloud-dev:php8.4
+  volumes:
+    - ${OCO_SERVER_PATH:-../owncloud.online}:/var/www/html
+    - ./:/var/www/html/apps/oco_synaplan
+    - owncloud_config:/var/www/html/config
+    - owncloud_data:/var/www/owncloud-data
+  environment:
+    DB_PASS: owncloud
+    OCO_TAG: ${OCO_TAG:-v11.0.10}
+    SYNAPLAN_URL_LOCAL: ${SYNAPLAN_URL_LOCAL:-http://host.docker.internal:8000}
+    SYNAPLAN_PUBLIC_URL_LOCAL: ${SYNAPLAN_PUBLIC_URL_LOCAL:-}
+    SYNAPLAN_DELIVERY_URL: ${SYNAPLAN_DELIVERY_URL:-http://host.docker.internal:8083/index.php/apps/oco_synaplan/api/v1/inbound}
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  restart: unless-stopped
+
+services:
+  owncloud:
+    <<: *owncloud
+    build:
+      context: docker
+      dockerfile: Dockerfile.dev
+    container_name: synaplan-owncloud-dev
+    hostname: owncloud
+    ports:
+      - "8083:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost/status.php | grep -q '\"installed\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  # Background jobs every 60 seconds, as `php occ system:cron` from the system cron would run them.
+  owncloud-cron:
+    <<: *owncloud
+    container_name: synaplan-owncloud-dev-cron
+    # The image the owncloud service builds.
+    pull_policy: never
+    command: ["cron"]
+    depends_on:
+      owncloud:
+        condition: service_healthy
+
+  db:
+    image: mariadb:10.11@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+    container_name: synaplan-owncloud-dev-db
+    command: --transaction-isolation=READ-COMMITTED
+    environment:
+      MARIADB_ROOT_PASSWORD: owncloud-root
+      MARIADB_DATABASE: owncloud
+      MARIADB_USER: owncloud
+      MARIADB_PASSWORD: owncloud
+    volumes:
+      - owncloud_db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  owncloud_config:
+  owncloud_data:
+  owncloud_db:

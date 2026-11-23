@@ -3,7 +3,7 @@
  *
  * Mirrors appinfo/routes.php. All calls go through apiFetch (CSRF-aware fetch).
  */
-import { apiFetch, streamUrl, url } from './oc'
+import { ApiError, apiFetch, streamUrl, url } from './oc'
 
 export interface ClientConfig {
   success: boolean
@@ -34,27 +34,99 @@ export interface FileGroup {
   count: number
 }
 
+export type Mode = 'shared' | 'provision' | 'link'
+
+export interface RegistrationStatus {
+  status?: string
+  host?: string
+  error?: string
+}
+
 export interface Settings {
   active_env: 'live' | 'local'
   synaplan_url: string
   api_key_set: boolean
   api_key_masked: string
   synaplan_url_local: string
+  synaplan_public_url: string
+  synaplan_public_url_local: string
   api_key_local_set: boolean
   api_key_local_masked: string
   default_language: string
   use_interface_language: boolean
   enable_memories: boolean
   per_user_accounts: boolean
+  mode: Mode
+  link_auto_provision: boolean
+  link_registered: boolean
+  link_instance_id: string
+  link_instance: RegistrationStatus | null
+  /** Empty: Synaplan uses delivery_url_default. */
+  delivery_url: string
+  delivery_url_default: string
 }
 
-export interface ConsentState {
+export interface SettingsSaved {
+  success: boolean
+  announce_error?: boolean
+  /** `invalid`: not a web address, not saved; `refused`: saved, but Synaplan does not call it. */
+  delivery_error?: '' | 'invalid' | 'refused'
+}
+
+/** A file of the person's in Synaplan, as the From Synaplan picker lists it. */
+export interface SynaplanFile {
+  id: number
+  name: string
+  generated: boolean
+  /** Unix seconds; 0 when Synaplan did not say. */
+  uploaded_at: number
+}
+
+export type SynaplanFileFilter = 'generated' | 'all'
+
+/** A copy Synaplan sent while the person was away, shown on their next page. */
+export interface CopyNotice {
+  name: string
+  folder: string
+  link: string
+}
+
+export interface LinkStatus {
+  mode: Mode
+  link_available: boolean
+  auto_provision: boolean
+  linked: { email: string; since: string } | null
+  kind: 'linked' | 'provisioned' | null
+}
+
+export interface ConsentState extends LinkStatus {
   required: boolean
   granted: boolean
+  host: string
+  url: string
+}
+
+export interface ConsentAnswer {
+  success: boolean
+  required?: boolean
+  granted?: boolean
+  conflict?: boolean
+}
+
+export interface AiUser {
+  uid: string
+  displayName: string
+  email: string
+  synaplanUserId: number | null
+  hasKey: boolean
+  consentAt: string
+  kind: 'linked' | 'provisioned' | null
 }
 
 export const api = {
   getClientConfig: () => apiFetch<ClientConfig>('/api/v1/client-config'),
+
+  features: () => apiFetch<{ translation: boolean }>('/api/v1/features'),
 
   getGroups: () => apiFetch<{ success: boolean; groups: FileGroup[] }>('/api/v1/knowledge/groups'),
 
@@ -95,7 +167,7 @@ export const api = {
     message: string
     fileId?: number | null
     groupKey?: string | null
-    modelId?: number | null
+    model?: string | null
     useMemories?: boolean
   }) => apiFetch<{ success: boolean; response: string }>('/api/v1/chat', { method: 'POST', body: payload }),
 
@@ -115,39 +187,74 @@ export const api = {
 
   mediaProxyUrl: (mediaUrl: string) => url('/api/v1/media/proxy') + '?url=' + encodeURIComponent(mediaUrl),
 
+  // From Synaplan: the person's Synaplan files, copied into the folder that is open
+  listSynaplanFiles: (page: number, filter: SynaplanFileFilter, search: string) =>
+    apiFetch<{ files: SynaplanFile[]; page: number; pages: number }>(
+      '/api/v1/from-synaplan?' + new URLSearchParams({ page: String(page), filter, search }).toString(),
+    ),
+  copyFromSynaplan: (fileId: number, folder: string, name: string) =>
+    apiFetch<{ success: boolean; name: string; folder: string }>('/api/v1/from-synaplan', {
+      method: 'POST',
+      body: { fileId, folder, name },
+    }),
+
+  getPreferences: () => apiFetch<{ copy_folder: string }>('/api/v1/preferences'),
+  savePreferences: (copyFolder: string) =>
+    apiFetch<{ success: boolean; copy_folder: string }>('/api/v1/preferences', {
+      method: 'PUT',
+      body: { copy_folder: copyFolder },
+    }),
+
+  notices: () => apiFetch<{ notices: CopyNotice[] }>('/api/v1/notices'),
+  forgetNotices: (count: number) =>
+    apiFetch<{ success: boolean }>('/api/v1/notices', { method: 'DELETE', body: { count } }),
+
   // Settings (admin)
   getSettings: () => apiFetch<Settings>('/api/v1/settings'),
-  saveSettings: (body: Record<string, unknown>) =>
-    apiFetch<{ success: boolean }>('/api/v1/settings', { method: 'PUT', body }),
+  saveSettings: (body: Record<string, unknown>) => apiFetch<SettingsSaved>('/api/v1/settings', { method: 'PUT', body }),
   testConnection: () =>
     apiFetch<{ success: boolean; status?: string; error?: string; providers?: Record<string, boolean> }>(
       '/api/v1/settings/test',
       { method: 'POST' },
     ),
+  registerInstance: (registrationToken: string) =>
+    apiFetch<{ success: boolean; instance_id?: string; status?: string; error?: string; code?: string }>(
+      '/api/v1/settings/register-instance',
+      { method: 'POST', body: { registration_token: registrationToken } },
+    ),
+  forgetInstance: () => apiFetch<{ success: boolean }>('/api/v1/settings/forget-instance', { method: 'POST' }),
+  instanceStatus: () =>
+    apiFetch<{ success: boolean; instance: RegistrationStatus | null }>('/api/v1/settings/instance-status'),
 
-  // Consent (per-user mode)
+  // Consent and the person's own connection
   getConsent: () => apiFetch<ConsentState>('/api/v1/ai-consent'),
-  setConsent: (granted: boolean) =>
-    apiFetch<{ success: boolean } & ConsentState>('/api/v1/ai-consent', { method: 'POST', body: { granted } }),
+  setConsent: (granted: boolean, createAccount = false) =>
+    apiFetch<ConsentAnswer>('/api/v1/ai-consent', {
+      method: 'POST',
+      body: { granted, create_account: createAccount },
+    }),
+  linkStatus: () => apiFetch<LinkStatus>('/api/v1/link/status'),
+  disconnect: () => apiFetch<{ success: boolean }>('/link/disconnect', { method: 'POST' }),
 
   // Admin AI users control panel
-  listAiUsers: () =>
-    apiFetch<{
-      success: boolean
-      users: Array<{
-        uid: string
-        displayName: string
-        email: string
-        synaplanUserId: number | null
-        hasKey: boolean
-        consentAt: string
-      }>
-    }>('/api/v1/admin/ai-users'),
-  aiUserUsage: (uid: string) => apiFetch<Record<string, unknown>>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/usage'),
+  listAiUsers: () => apiFetch<{ success: boolean; users: AiUser[] }>('/api/v1/admin/ai-users'),
+  aiUserUsage: (uid: string) =>
+    apiFetch<Record<string, unknown>>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/usage'),
   deactivateAiUser: (uid: string) =>
     apiFetch<{ success: boolean }>('/api/v1/admin/ai-users/' + encodeURIComponent(uid) + '/deactivate', {
       method: 'POST',
     }),
+}
+
+/**
+ * A failure the chat stream reported in an `error` event, carrying the code
+ * of lib/Http/Failure.php like a rejected request does.
+ */
+export class StreamError extends ApiError {
+  constructor(code: string, message?: string) {
+    super(200, { error: code, message })
+    this.name = 'StreamError'
+  }
 }
 
 /**
@@ -180,7 +287,13 @@ export async function chatStream(
   })
 
   if (!response.ok || !response.body) {
-    throw new Error('Stream failed (' + response.status + ')')
+    let data: unknown
+    try {
+      data = JSON.parse(await response.text())
+    } catch {
+      data = null
+    }
+    throw new ApiError(response.status, data)
   }
 
   const reader = response.body.getReader()
@@ -207,22 +320,23 @@ export async function chatStream(
         if (data === '' || data === '[DONE]') {
           continue
         }
+        let json: {
+          error?: { code?: string; message?: string } | string
+          choices?: Array<{ delta?: { content?: string }; text?: string }>
+        }
         try {
-          const json = JSON.parse(data)
-          if (json.error) {
-            throw new Error(json.error.message ?? 'Stream error')
-          }
-          const delta = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.text ?? ''
-          if (delta) {
-            onToken(delta)
-          }
-        } catch (e) {
-          if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
-            // Non-JSON keepalive/comment — ignore. Re-throw real stream errors.
-            if (e.message.startsWith('Stream error') || e.message === 'Stream failed') {
-              throw e
-            }
-          }
+          json = JSON.parse(data)
+        } catch {
+          // Keepalive or comment: nothing to show.
+          continue
+        }
+        if (json.error) {
+          const error = typeof json.error === 'string' ? { message: json.error } : json.error
+          throw new StreamError(error.code ?? '', error.message)
+        }
+        const delta = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.text ?? ''
+        if (delta) {
+          onToken(delta)
         }
       }
     }

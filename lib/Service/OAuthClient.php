@@ -1,0 +1,700 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Synaplan Integration for owncloud.online
+ *
+ * @copyright Copyright (c) 2026, Synaplan
+ * @license Apache-2.0
+ */
+
+namespace OCA\OcoSynaplan\Service;
+
+use Doctrine\DBAL\Result;
+use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Exception\PlatformLinkException;
+use OCP\Http\Client\IClientService;
+use OCP\IConfig;
+use OCP\IDBConnection;
+use OCP\ILogger;
+use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
+
+/**
+ * This ownCloud.online as an OAuth2 client of Synaplan.
+ *
+ * The installation registers itself (RFC 7591) with a key pair it made here
+ * and proves itself with short signed assertions (private_key_jwt): Synaplan
+ * keeps only the public key, and no secret ever crosses the wire. A person
+ * connects once (authorization code flow with PKCE); their rotating refresh
+ * token is kept encrypted in their user settings, and a short-lived access
+ * token is minted from it whenever the app acts for them. Disconnecting, or
+ * the account going away here, revokes the grant (RFC 7009).
+ */
+class OAuthClient
+{
+    public const SCOPE = 'chat files rag cloud:watch';
+    public const SOFTWARE_ID = 'owncloud';
+    public const ISSUER = 'notify_issuer';
+
+    private const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+    private const KEY = 'oauth_private_key';
+    private const KID = 'oauth_kid';
+    private const CLIENT_ID = 'link_instance_id';
+    private const REFRESH = 'synaplan_oauth_refresh';
+    private const ACCESS = 'synaplan_oauth_access';
+    private const EXPIRES = 'synaplan_oauth_expires';
+    /** The client id the grant belongs to: a new registration voids it. */
+    private const GRANT_CLIENT = 'synaplan_oauth_client';
+    private const REFRESH_WAIT_SECONDS = 10;
+    /** Counts withdrawals, so a refresh sees one that did not wait for its lock. */
+    private const WITHDRAWALS = 'synaplan_oauth_withdrawals';
+
+    public function __construct(
+        private IClientService $clientService,
+        private IConfig $config,
+        private IDBConnection $db,
+        private ILockingProvider $locks,
+        private KeyStorage $keys,
+        private SynaplanConfig $synaplanConfig,
+        private ILogger $logger,
+    ) {
+    }
+
+    public function clientId(): string
+    {
+        return (string) $this->config->getAppValue(Application::APP_ID, self::CLIENT_ID, '');
+    }
+
+    public function isRegistered(): bool
+    {
+        return $this->clientId() !== '' && $this->keys->getAppKey(self::KEY) !== '';
+    }
+
+    /**
+     * Register this ownCloud.online with Synaplan. The registration token (the
+     * initial access token a Synaplan administrator hands out) makes the
+     * client active at once; without it Synaplan may hold it for approval.
+     *
+     * @param array{redirect_uri: string, client_uri: string, delivery_url: string, capabilities: list<string>, server_id: string, version: string} $metadata
+     *
+     * @return array<string, mixed> Synaplan's answer
+     */
+    public function register(array $metadata, string $registrationToken): array
+    {
+        [$private, $kid] = $this->newKey();
+        $headers = $registrationToken !== '' ? ['Authorization' => 'Bearer ' . $registrationToken] : [];
+        $answer = $this->json('POST', '/oauth/register', [
+            'software_id' => self::SOFTWARE_ID,
+            'software_version' => $metadata['version'],
+            'client_uri' => $metadata['client_uri'],
+            'redirect_uris' => [$metadata['redirect_uri']],
+            'grant_types' => ['authorization_code', 'refresh_token'],
+            'token_endpoint_auth_method' => 'private_key_jwt',
+            'jwks' => ['keys' => [$this->publicJwk($private, $kid)]],
+            'delivery_url' => $metadata['delivery_url'],
+            'app_capabilities' => $metadata['capabilities'],
+            'server_id' => $metadata['server_id'],
+        ], $headers);
+        $clientId = $answer['client_id'] ?? null;
+        if (!is_string($clientId) || $clientId === '') {
+            throw new PlatformLinkException('Synaplan did not register this ownCloud.online.', PlatformLinkException::CODE_EXCHANGE);
+        }
+        // Kept only now: a refused registration leaves a working one as it was.
+        $this->keys->setAppKey(self::KEY, $private);
+        $this->config->setAppValue(Application::APP_ID, self::KID, $kid);
+        $this->config->setAppValue(Application::APP_ID, self::CLIENT_ID, $clientId);
+
+        return $answer;
+    }
+
+    /**
+     * The registration as Synaplan has it (RFC 7592): status, delivery
+     * address, reachability.
+     *
+     * @return array<string, mixed>
+     */
+    public function configuration(): array
+    {
+        return $this->asClient('GET', '/oauth/register/' . rawurlencode($this->clientId()));
+    }
+
+    /**
+     * @param array<string, mixed> $changes
+     *
+     * @return array<string, mixed>
+     */
+    public function updateConfiguration(array $changes): array
+    {
+        return $this->asClient('PUT', '/oauth/register/' . rawurlencode($this->clientId()), $changes);
+    }
+
+    /**
+     * Tell Synaplan a person here was deleted, disabled or enabled again.
+     * Synaplan pauses, resumes or ends their link; a disabled person resumes
+     * without connecting again.
+     *
+     * @return array<string, mixed> Synaplan's answer: `account` (kept,
+     *                              deleted, absent, unchanged) and `status`
+     */
+    public function reportLifecycle(string $externalId, string $event): array
+    {
+        return $this->asClient('POST', '/oauth/register/' . rawurlencode($this->clientId()) . '/lifecycle', [
+            'external_id' => $externalId,
+            'event' => $event,
+        ]);
+    }
+
+    /**
+     * Leave Synaplan: every grant of this client ends there, and the key and
+     * client id go here.
+     */
+    public function unregister(): void
+    {
+        if ($this->isRegistered()) {
+            try {
+                $this->asClient('DELETE', '/oauth/register/' . rawurlencode($this->clientId()));
+            } catch (\Throwable $e) {
+                $this->logger->warning('Could not unregister from Synaplan: {message}', ['app' => Application::APP_ID, 'message' => $e->getMessage()]);
+            }
+        }
+        $this->config->deleteAppValue(Application::APP_ID, self::CLIENT_ID);
+        $this->keys->deleteAppKey(self::KEY);
+        $this->config->deleteAppValue(Application::APP_ID, self::KID);
+    }
+
+    /**
+     * Where the person's browser goes to allow this ownCloud.online. Keep the
+     * verifier until the code comes back.
+     *
+     * @return array{url: string, verifier: string}
+     */
+    public function authorizeUrl(string $uid, string $state, string $redirectUri, bool $withMemories): array
+    {
+        $verifier = self::b64(random_bytes(32));
+        // Pushed from this server, signed as the client (RFC 9126): Synaplan
+        // takes the person (external_id) from here only, never from the
+        // browser, which carries just the one-time reference.
+        $pushed = $this->form('/oauth/par', [
+            'response_type' => 'code',
+            'redirect_uri' => $redirectUri,
+            'scope' => self::SCOPE . ($withMemories ? ' memories' : ''),
+            'state' => $state,
+            'code_challenge' => self::b64(hash('sha256', $verifier, true)),
+            'code_challenge_method' => 'S256',
+            'external_id' => $uid,
+        ] + $this->assertionFields());
+        $requestUri = $pushed['request_uri'] ?? null;
+        if (!is_string($requestUri) || $requestUri === '') {
+            throw new PlatformLinkException('Synaplan did not take the authorization request.', PlatformLinkException::CODE_EXCHANGE);
+        }
+
+        return [
+            'url' => $this->issuer() . '/oauth/authorize?' . http_build_query([
+                'client_id' => $this->clientId(),
+                'request_uri' => $requestUri,
+            ]),
+            'verifier' => $verifier,
+        ];
+    }
+
+    /**
+     * Turn the code into the person's grant and keep it.
+     */
+    public function connect(string $uid, string $code, string $verifier, string $redirectUri): void
+    {
+        $this->remember($uid, $this->token([
+            'grant_type' => 'authorization_code',
+            'code' => $code,
+            'redirect_uri' => $redirectUri,
+            'code_verifier' => $verifier,
+        ]));
+    }
+
+    /**
+     * @phpstan-impure accessToken() forgets a grant Synaplan ended
+     */
+    public function isConnected(string $uid): bool
+    {
+        return $this->secret($uid, self::REFRESH) !== '';
+    }
+
+    /**
+     * A current access token for the person, refreshed when it ran out; ''
+     * when they are not connected or Synaplan ended the grant (it is then
+     * forgotten here).
+     */
+    public function accessToken(string $uid): string
+    {
+        $access = $this->currentAccess($uid);
+        if ($access !== '' || $this->secret($uid, self::REFRESH) === '') {
+            return $access;
+        }
+        // A refresh token works once (rotation): two requests refreshing with
+        // the same one would end the grant. One refreshes, the others wait
+        // and take its token.
+        $lock = Application::APP_ID . '/oauth-refresh/' . $uid;
+        if (!$this->acquire($lock)) {
+            return $this->currentAccess($uid, true);
+        }
+        try {
+            $access = $this->currentAccess($uid, true);
+            $refresh = $this->secret($uid, self::REFRESH, true);
+            if ($access !== '' || $refresh === '') {
+                return $access;
+            }
+            $withdrawals = $this->withdrawals($uid);
+            try {
+                $tokens = $this->refresh($refresh);
+            } catch (PlatformLinkException $e) {
+                if ($e->getErrorCode() === PlatformLinkException::CODE_GRANT_ENDED) {
+                    $this->drop($uid);
+                }
+
+                return '';
+            }
+            // A withdrawal that could not wait for this refresh may forget the
+            // grant while Synaplan answers, or between this check and the
+            // write: the answer must not bring it back. A withdrawal counts
+            // before it deletes, so one the second check misses deletes after
+            // the write.
+            if ($this->secret($uid, self::REFRESH, true) !== $refresh || $this->withdrawals($uid) !== $withdrawals) {
+                $this->revokeQuietly($uid, (string) ($tokens['refresh_token'] ?? ''));
+
+                return '';
+            }
+            $this->remember($uid, $tokens);
+            if ($this->withdrawals($uid) !== $withdrawals) {
+                $this->drop($uid);
+                $this->revokeQuietly($uid, (string) ($tokens['refresh_token'] ?? ''));
+
+                return '';
+            }
+
+            return (string) ($tokens['access_token'] ?? '');
+        } finally {
+            $this->locks->releaseLock($lock, ILockingProvider::LOCK_EXCLUSIVE);
+        }
+    }
+
+    /**
+     * Synaplan may have rotated the refresh token although its answer never
+     * arrived. It accepts the replaced token for a minute more, so asking
+     * again at once keeps the grant that the next attempt would have lost.
+     *
+     * @return array<string, mixed>
+     */
+    private function refresh(string $refresh): array
+    {
+        $params = ['grant_type' => 'refresh_token', 'refresh_token' => $refresh];
+        try {
+            return $this->token($params);
+        } catch (PlatformLinkException $e) {
+            if ($e->getErrorCode() !== PlatformLinkException::CODE_UNREACHABLE) {
+                throw $e;
+            }
+
+            return $this->token($params);
+        }
+    }
+
+    private function currentAccess(string $uid, bool $fresh = false): string
+    {
+        $access = $this->secret($uid, self::ACCESS, $fresh);
+        $expires = (int) $this->userValue($uid, self::EXPIRES, $fresh);
+
+        return $access !== '' && $expires > time() + 30 ? $access : '';
+    }
+
+    private function acquire(string $lock): bool
+    {
+        $deadline = microtime(true) + self::REFRESH_WAIT_SECONDS;
+        while (true) {
+            try {
+                $this->locks->acquireLock($lock, ILockingProvider::LOCK_EXCLUSIVE);
+
+                return true;
+            } catch (LockedException) {
+                if (microtime(true) >= $deadline) {
+                    return false;
+                }
+                usleep(100_000);
+            }
+        }
+    }
+
+    /**
+     * End the person's grant at Synaplan (which ends their link there) and
+     * forget it here.
+     *
+     * A Synaplan that no longer accepts this ownCloud.online ended every grant
+     * with the registration and takes no revocation from it, so the person
+     * leaves here without it.
+     *
+     * @throws PlatformLinkException when Synaplan could not be told; the
+     *                               grant is kept so disconnecting can be retried
+     */
+    public function revoke(string $uid): void
+    {
+        // Wait for a refresh under way, or the token revoked here is the one
+        // it is rotating away from.
+        $this->whileRefreshing($uid, function () use ($uid): void {
+            $refresh = $this->secret($uid, self::REFRESH, true);
+            if ($refresh !== '' && $this->isRegistered()) {
+                try {
+                    $this->form('/oauth/revoke', ['token' => $refresh] + $this->assertionFields());
+                } catch (PlatformLinkException $e) {
+                    if (!in_array($e->getErrorCode(), [PlatformLinkException::CODE_GRANT_ENDED, PlatformLinkException::CODE_CLIENT_REFUSED], true)) {
+                        $this->logger->warning('Could not revoke the Synaplan grant of {uid}: {message}', [
+                            'app' => Application::APP_ID,
+                            'uid' => $uid,
+                            'message' => $e->getMessage(),
+                        ]);
+
+                        throw $e;
+                    }
+                }
+            }
+            $this->withdraw($uid);
+        });
+    }
+
+    public function forget(string $uid): void
+    {
+        $this->whileRefreshing($uid, fn () => $this->withdraw($uid));
+    }
+
+    /**
+     * Run while no refresh of this person's grant is under way. A refresh
+     * that outlasts the wait sees the withdrawal counted and does not keep
+     * its answer.
+     *
+     * @param \Closure(): void $work
+     */
+    private function whileRefreshing(string $uid, \Closure $work): void
+    {
+        $lock = Application::APP_ID . '/oauth-refresh/' . $uid;
+        $locked = $this->acquire($lock);
+        try {
+            $work();
+        } finally {
+            if ($locked) {
+                $this->locks->releaseLock($lock, ILockingProvider::LOCK_EXCLUSIVE);
+            }
+        }
+    }
+
+    private function withdraw(string $uid): void
+    {
+        $this->config->setUserValue($uid, Application::APP_ID, self::WITHDRAWALS, (string) ($this->withdrawals($uid) + 1));
+        $this->drop($uid);
+    }
+
+    /**
+     * @phpstan-impure a withdrawal in another request counts up
+     */
+    private function withdrawals(string $uid): int
+    {
+        return (int) $this->userValue($uid, self::WITHDRAWALS, true);
+    }
+
+    private function drop(string $uid): void
+    {
+        foreach ([self::REFRESH, self::ACCESS, self::EXPIRES, self::GRANT_CLIENT] as $key) {
+            $this->config->deleteUserValue($uid, Application::APP_ID, $key);
+        }
+    }
+
+    private function revokeQuietly(string $uid, string $refresh): void
+    {
+        if ($refresh === '') {
+            return;
+        }
+        try {
+            $this->form('/oauth/revoke', ['token' => $refresh] + $this->assertionFields());
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not revoke a Synaplan grant of {uid} that was withdrawn during a refresh: {message}', [
+                'app' => Application::APP_ID,
+                'uid' => $uid,
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * The assertion names the client; the token endpoint declares no
+     * client_id field.
+     *
+     * @param array<string, string> $params
+     *
+     * @return array<string, mixed>
+     */
+    private function token(array $params): array
+    {
+        return $this->form('/oauth/token', $params + $this->assertionFields());
+    }
+
+    /**
+     * @param array<string, mixed> $tokens
+     */
+    private function remember(string $uid, array $tokens): void
+    {
+        $access = (string) ($tokens['access_token'] ?? '');
+        $refresh = (string) ($tokens['refresh_token'] ?? '');
+        if ($access === '' || $refresh === '') {
+            throw new PlatformLinkException('Synaplan answered without tokens.', PlatformLinkException::CODE_EXCHANGE);
+        }
+        $this->keys->setUserSecret($uid, self::REFRESH, $refresh);
+        $this->keys->setUserSecret($uid, self::ACCESS, $access);
+        $this->config->setUserValue($uid, Application::APP_ID, self::EXPIRES, (string) (time() + (int) ($tokens['expires_in'] ?? 0)));
+        $this->config->setUserValue($uid, Application::APP_ID, self::GRANT_CLIENT, $this->clientId());
+    }
+
+    /**
+     * A grant of an earlier registration counts as none: Synaplan ended it
+     * with that registration.
+     *
+     * @param bool $fresh read past this request's settings cache: another
+     *                    request may have rotated the grant meanwhile
+     *
+     * @phpstan-impure another request may have rotated the grant meanwhile
+     */
+    private function secret(string $uid, string $key, bool $fresh = false): string
+    {
+        $client = $this->clientId();
+        if ($client === '' || $this->userValue($uid, self::GRANT_CLIENT, $fresh) !== $client) {
+            return '';
+        }
+        if (!$fresh) {
+            return $this->keys->getUserSecret($uid, $key) ?? '';
+        }
+
+        return $this->keys->open($this->userValue($uid, $key, true)) ?? '';
+    }
+
+    private function userValue(string $uid, string $key, bool $fresh): string
+    {
+        if (!$fresh) {
+            return (string) $this->config->getUserValue($uid, Application::APP_ID, $key, '');
+        }
+        $query = $this->db->getQueryBuilder();
+        $query->select('configvalue')
+            ->from('preferences')
+            ->where($query->expr()->eq('userid', $query->createNamedParameter($uid)))
+            ->andWhere($query->expr()->eq('appid', $query->createNamedParameter(Application::APP_ID)))
+            ->andWhere($query->expr()->eq('configkey', $query->createNamedParameter($key)));
+        $result = $query->execute();
+        if (!$result instanceof Result) {
+            return '';
+        }
+        $value = $result->fetchOne();
+        $result->free();
+
+        return is_string($value) ? $value : '';
+    }
+
+    /**
+     * A call about this registration, signed as the client (RFC 7592). Its
+     * assertion names the endpoint it is for: Synaplan does not take the
+     * bare issuer here, so an assertion made for the token endpoint cannot
+     * change the registration.
+     *
+     * @param array<string, mixed>|null $body
+     *
+     * @return array<string, mixed>
+     */
+    private function asClient(string $method, string $path, ?array $body = null): array
+    {
+        return $this->json($method, $path, $body, ['Authorization' => 'Bearer ' . $this->assertion($path)], true);
+    }
+
+    /**
+     * @return array{client_assertion_type: string, client_assertion: string}
+     */
+    private function assertionFields(): array
+    {
+        return ['client_assertion_type' => self::ASSERTION_TYPE, 'client_assertion' => $this->assertion()];
+    }
+
+    /**
+     * A one-minute client assertion, addressed to Synaplan's issuer, or to
+     * the endpoint at path under it.
+     */
+    public function assertion(string $path = ''): string
+    {
+        $clientId = $this->clientId();
+        $header = self::b64((string) json_encode(['alg' => 'RS256', 'typ' => 'JWT', 'kid' => (string) $this->config->getAppValue(Application::APP_ID, self::KID, '')]));
+        $payload = self::b64((string) json_encode([
+            'iss' => $clientId,
+            'sub' => $clientId,
+            'aud' => $this->issuer() . $path,
+            'jti' => bin2hex(random_bytes(16)),
+            // Synaplan allows a minute of clock skew; backdating iat adds room
+            // for a clock here that runs further ahead.
+            'iat' => time() - 30,
+            'exp' => time() + 60,
+        ], JSON_UNESCAPED_SLASHES));
+        $private = $this->keys->getAppKey(self::KEY);
+        if ($private === '' || !openssl_sign($header . '.' . $payload, $signature, $private, OPENSSL_ALGO_SHA256)) {
+            throw new PlatformLinkException('This ownCloud.online has no Synaplan client key.', PlatformLinkException::CODE_NOT_REGISTERED);
+        }
+
+        return $header . '.' . $payload . '.' . self::b64((string) $signature);
+    }
+
+    /**
+     * Synaplan's issuer, as its public configuration names it. Remembered:
+     * signed notifications carry it too.
+     */
+    public function issuer(): string
+    {
+        $issuer = (string) $this->config->getAppValue(Application::APP_ID, self::ISSUER, '');
+        if ($issuer === '') {
+            $configuration = $this->json('GET', '/.well-known/synaplan-configuration', null, []);
+            $issuer = is_string($configuration['issuer'] ?? null) ? $configuration['issuer'] : '';
+            if ($issuer !== '') {
+                $this->config->setAppValue(Application::APP_ID, self::ISSUER, rtrim($issuer, '/'));
+            }
+        }
+        if ($issuer === '') {
+            throw new PlatformLinkException('Synaplan did not say who it is (/.well-known/synaplan-configuration).', PlatformLinkException::CODE_EXCHANGE);
+        }
+
+        return rtrim($issuer, '/');
+    }
+
+    /**
+     * Read the issuer again on next use, after the Synaplan address changed.
+     */
+    public function forgetIssuer(): void
+    {
+        $this->config->deleteAppValue(Application::APP_ID, self::ISSUER);
+    }
+
+    /**
+     * @return array{0: string, 1: string} the private key (PEM) and its key id
+     */
+    private function newKey(): array
+    {
+        $key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        if ($key === false || !openssl_pkey_export($key, $private)) {
+            throw new PlatformLinkException('Could not create the Synaplan client key.', PlatformLinkException::CODE_EXCHANGE);
+        }
+
+        return [(string) $private, bin2hex(random_bytes(8))];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function publicJwk(string $privatePem, string $kid): array
+    {
+        $private = openssl_pkey_get_private($privatePem);
+        $details = $private === false ? false : openssl_pkey_get_details($private);
+        if (!is_array($details) || !isset($details['rsa']['n'], $details['rsa']['e'])) {
+            throw new PlatformLinkException('The Synaplan client key is unreadable.', PlatformLinkException::CODE_EXCHANGE);
+        }
+
+        return [
+            'kty' => 'RSA',
+            'kid' => $kid,
+            'use' => 'sig',
+            'alg' => 'RS256',
+            'n' => self::b64($details['rsa']['n']),
+            'e' => self::b64($details['rsa']['e']),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed>|null $body
+     * @param array<string, string> $headers
+     *
+     * @return array<string, mixed>
+     */
+    private function json(string $method, string $path, ?array $body, array $headers, bool $asClient = false): array
+    {
+        $options = [
+            'headers' => $headers + ['Accept' => 'application/json', 'Content-Type' => 'application/json'],
+        ];
+        if ($body !== null) {
+            $options['body'] = json_encode($body, JSON_UNESCAPED_SLASHES);
+        }
+
+        return $this->send($method, $path, $options, $asClient);
+    }
+
+    /**
+     * Every form goes to an endpoint that authenticates the client.
+     *
+     * @param array<string, string> $fields
+     *
+     * @return array<string, mixed>
+     */
+    private function form(string $path, array $fields): array
+    {
+        return $this->send('POST', $path, [
+            'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/x-www-form-urlencoded'],
+            'body' => http_build_query($fields),
+        ], true);
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @param bool $asClient whether the request is signed as the client
+     *
+     * @return array<string, mixed>
+     */
+    private function send(string $method, string $path, array $options, bool $asClient): array
+    {
+        $options += [
+            'timeout' => 30,
+            'http_errors' => false,
+        ];
+        $url = $this->synaplanConfig->getBaseUrl() . $path;
+        $client = $this->clientService->newClient();
+        try {
+            $response = match ($method) {
+                'GET' => $client->get($url, $options),
+                'PUT' => $client->put($url, $options),
+                'DELETE' => $client->delete($url, $options),
+                default => $client->post($url, $options),
+            };
+        } catch (\Throwable) {
+            throw new PlatformLinkException('Synaplan cannot be reached.', PlatformLinkException::CODE_UNREACHABLE);
+        }
+        $status = (int) $response->getStatusCode();
+        $decoded = json_decode((string) $response->getBody(), true);
+        $body = is_array($decoded) ? $decoded : [];
+        if ($status >= 400) {
+            $error = is_string($body['error'] ?? null) ? $body['error'] : '';
+            // Only invalid_grant is about the person's grant. A 401 to a
+            // signed request (invalid_client, or invalid_token where the
+            // assertion is the bearer) is about the registration: it concerns
+            // everybody and must not cost each person their connection.
+            $code = match (true) {
+                $error === 'invalid_grant' => PlatformLinkException::CODE_GRANT_ENDED,
+                $error === 'invalid_client_metadata' && $status === 400 => PlatformLinkException::CODE_METADATA_REFUSED,
+                $asClient && $status === 401 => PlatformLinkException::CODE_CLIENT_REFUSED,
+                default => PlatformLinkException::CODE_EXCHANGE,
+            };
+            if ($code === PlatformLinkException::CODE_CLIENT_REFUSED) {
+                $this->logger->warning('Synaplan does not accept this ownCloud.online as its client ({path}); check the registration in the admin settings.', [
+                    'app' => Application::APP_ID,
+                    'path' => $path,
+                ]);
+            }
+            throw new PlatformLinkException(
+                is_string($body['error_description'] ?? null) ? $body['error_description'] : 'Synaplan refused the request (' . $status . ').',
+                $code,
+            );
+        }
+
+        return $body;
+    }
+
+    private static function b64(string $raw): string
+    {
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+}

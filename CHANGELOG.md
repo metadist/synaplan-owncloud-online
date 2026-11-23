@@ -4,6 +4,65 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **How do people here use Synaplan?** in the admin screen, with the modes of
+  the Nextcloud app: connect your Synaplan account, accounts created by the
+  administrator, one shared account. Organisation login is shown as not
+  available on ownCloud.online. Settings of 1.0.0 move over on upgrade.
+- **Connect your Synaplan account**: each person connects an account they
+  already have (OAuth 2 with PKCE and pushed authorization requests) and sees
+  or ends the connection under Settings → Personal → Synaplan.
+- **Register this instance** with Synaplan from the admin screen (dynamic
+  client registration, with the registration code when Synaplan asks for one).
+- Synaplan hears when the administrator deletes, disables or enables a person.
+  Deleting ends their connection and deletes an account this server created
+  for them unless they also use it elsewhere; disabling pauses them until they
+  are enabled again.
+- **Deactivate** under AI Users pauses a person whose account this server
+  created; **Use Synaplan** resumes the same account and key, and connecting
+  their own Synaplan account replaces it.
+- Accounts created before this server registered are moved onto the
+  registration by an hourly background job, once per registration.
+- The consent card before the first action whenever a person's own Synaplan
+  account is used.
+- One sentence per failure, with a link to the page that fixes it.
+- The chat launcher on every page for signed-in people.
+- German (informal and formal), Spanish, French and Turkish, in the words
+  Synaplan itself uses.
+- **Copies from Synaplan**: *Copy to cloud* in Synaplan saves the file into the
+  person's files, in a folder for its kind under `Synaplan/` or under the
+  folder they choose in Settings → Personal → Synaplan, next to an earlier copy
+  as `name (2)`. Their next page says what was copied where, with a link; with
+  the notifications app the notice goes there.
+- **New → From Synaplan…** in Files adds Synaplan files to the open folder, the
+  ones Synaplan made first.
+- **Save to Files** in the chat saves images, videos, audio, documents and
+  calendar files, each into the folder for its kind.
+- **Address Synaplan uses to reach this ownCloud.online** in the admin screen,
+  for a Synaplan that reaches this server at another address than people use.
+- Notices from Synaplan are signed and checked; a connection that ended in
+  Synaplan asks the person to connect again on their next action.
+
+### Changed
+
+- **Add to Knowledge** is now **Make searchable by AI**, and the chat picks a
+  knowledge folder.
+- Summarize, Translate and Make searchable by AI appear only on files Synaplan
+  can read.
+- Keys are stored encrypted. A key 1.0.0 stored in plain text is encrypted on
+  first use.
+
+### Fixed
+
+- Coming back from Synaplan no longer signs the person out when the browser
+  treats Synaplan as another site.
+- Chat answers render Markdown without running HTML from the answer.
+- Saving or showing generated media only fetches paths on the Synaplan host, so
+  the key is never sent to another server.
+
 ## [1.0.0] - 2026-07-15
 
 Initial release — the Synaplan integration for BW-Tech ownCloud.online 11.0.10,
