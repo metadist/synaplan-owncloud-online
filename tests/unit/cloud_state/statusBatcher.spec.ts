@@ -169,3 +169,46 @@ describe('the state of the rows', () => {
     expect(told).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('an answer asked for before the person changed what Synaplan holds', () => {
+  const nothing = (): Response => Response.json({ success: true, enabled: true, items: [] })
+
+  it('is neither shown nor kept: the row gets the answer asked for after it', async () => {
+    const { invalidateCloudStatusCache, requestRowStatus } = await batcher()
+    let answerBeforeRemove: (response: Response) => void = () => {}
+    answer = () => {
+      answer = nothing
+      return new Promise<Response>((resolve) => (answerBeforeRemove = resolve))
+    }
+
+    const before = requestRowStatus('7', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    invalidateCloudStatusCache()
+    const after = requestRowStatus('7', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    answerBeforeRemove(searchable([{ id: '7' }]))
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect((await after).item).toBeNull()
+    expect((await before).item).toBeNull()
+    expect((await requestRowStatus('7', 'e1')).item).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('that failed is asked again as well', async () => {
+    const { invalidateCloudStatusCache, requestRowStatus } = await batcher()
+    let failBeforeRemove: () => void = () => {}
+    answer = () => {
+      answer = nothing
+      return new Promise<Response>((resolve) => (failBeforeRemove = () => resolve(new Response('', { status: 500 }))))
+    }
+
+    const before = requestRowStatus('7', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    invalidateCloudStatusCache()
+    failBeforeRemove()
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(await before).toMatchObject({ enabled: true, unreachable: false, item: null })
+  })
+})

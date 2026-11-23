@@ -33,6 +33,8 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 let featureEnabled: boolean | null = null
 let lastGlyphs: GlyphOverrides = {}
 let lastOpenSynaplanUrl = ''
+/** Counts invalidations: an answer asked for before the last one is out of date. */
+let generation = 0
 
 const cacheKey = (id: string, version: string): string => `${id}:${version}`
 
@@ -65,6 +67,7 @@ export function onCloudStatusInvalidated(listener: () => void): () => void {
 
 /** Forget every answer after Make searchable or Remove, and redraw. */
 export function invalidateCloudStatusCache(): void {
+  generation++
   cache.clear()
   featureEnabled = null
   listeners.forEach((listener) => listener())
@@ -106,8 +109,13 @@ async function flush(): Promise<void> {
   pending.clear()
   for (let offset = 0; offset < entries.length; offset += MAX_BATCH) {
     const slice = entries.slice(offset, offset + MAX_BATCH)
+    const asked = generation
     try {
       const answer = await api.cloudStatus(slice.map(({ id, version }) => ({ id, version })))
+      if (asked !== generation) {
+        askAgain(slice)
+        continue
+      }
       const enabled = answer?.enabled === true
       const unreachable = answer?.unreachable === true
       featureEnabled = enabled
@@ -132,10 +140,23 @@ async function flush(): Promise<void> {
         entry.resolvers.forEach((resolve) => resolve(status))
       }
     } catch {
+      if (asked !== generation) {
+        askAgain(slice)
+        continue
+      }
       for (const entry of slice) {
         const status = rowStatus(featureEnabled ?? false, true, null)
         entry.resolvers.forEach((resolve) => resolve(status))
       }
     }
+  }
+}
+
+/** Ask again for rows whose answer was asked for before the cache was cleared, and hand them the new answer. */
+function askAgain(entries: Pending[]): void {
+  for (const entry of entries) {
+    void requestRowStatus(entry.id, entry.version).then((status) =>
+      entry.resolvers.forEach((resolve) => resolve(status)),
+    )
   }
 }
