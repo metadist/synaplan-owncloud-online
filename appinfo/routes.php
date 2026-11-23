@@ -61,5 +61,16 @@ return [
         ['name' => 'media#generate', 'url' => '/api/v1/media/generate', 'verb' => 'POST'],
         ['name' => 'media#save', 'url' => '/api/v1/media/save', 'verb' => 'POST'],
         ['name' => 'media#proxy', 'url' => '/api/v1/media/proxy', 'verb' => 'GET'],
+
+        // Synaplan's signed notifications (copies), and what a person set for them
+        ['name' => 'inbound#receive', 'url' => '/api/v1/inbound', 'verb' => 'POST'],
+        ['name' => 'preferences#get', 'url' => '/api/v1/preferences', 'verb' => 'GET'],
+        ['name' => 'preferences#save', 'url' => '/api/v1/preferences', 'verb' => 'PUT'],
+        ['name' => 'notices#list', 'url' => '/api/v1/notices', 'verb' => 'GET'],
+        ['name' => 'notices#clear', 'url' => '/api/v1/notices', 'verb' => 'DELETE'],
+
+        // New → From Synaplan… in the Files app
+        ['name' => 'fromSynaplan#list', 'url' => '/api/v1/from-synaplan', 'verb' => 'GET'],
+        ['name' => 'fromSynaplan#copy', 'url' => '/api/v1/from-synaplan', 'verb' => 'POST'],
     ],
 ];

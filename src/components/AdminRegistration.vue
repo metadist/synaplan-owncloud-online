@@ -10,10 +10,13 @@ const props = defineProps<{
   linkInstanceId: string
   linkInstance: RegistrationStatus | null
   registering: boolean
+  deliveryUrl: string
+  deliveryUrlDefault: string
 }>()
 
 const emit = defineEmits<{
   'update:registrationToken': [value: string]
+  'update:deliveryUrl': [value: string]
   register: []
   forget: []
 }>()
@@ -49,6 +52,21 @@ const statusLabel = computed(() => {
     </p>
     <p data-testid="synaplan-registration-status">
       {{ linkRegistered ? statusLabel : t('Not registered yet.') }}
+    </p>
+    <div class="synaplan-admin-field">
+      <label for="synaplan-delivery-url">{{ t('Address Synaplan uses to reach this {app}', { app: APP_NAME }) }}</label>
+      <input
+        id="synaplan-delivery-url"
+        :value="deliveryUrl"
+        type="url"
+        autocomplete="off"
+        :placeholder="deliveryUrlDefault"
+        :disabled="registering"
+        @input="emit('update:deliveryUrl', ($event.target as HTMLInputElement).value)"
+      />
+    </div>
+    <p class="oco-sub">
+      {{ t('Leave empty to use {address}. Synaplan sends copies of files there.', { address: deliveryUrlDefault }) }}
     </p>
     <div v-if="!linkRegistered" class="synaplan-admin-field">
       <label for="synaplan-registration-token">{{ t('Registration code from Synaplan (optional)') }}</label>

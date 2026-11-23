@@ -35,8 +35,10 @@ class PlatformLinkService
      * built here: Synaplan offers a feature to a person only when the app
      * says it has it.
      */
-    public const CAPABILITIES = [];
+    public const CAPABILITIES = ['deliveries'];
     private const REGISTRATION_STATUS = 'link_registration_status';
+    /** A copy may be 100 MB; its one-time download path is valid this long. */
+    private const DOWNLOAD_TIMEOUT = 300;
     /** Synaplan no longer accepts this registration; its own statuses are pending and active. */
     public const STATUS_REFUSED = 'refused';
 
@@ -167,12 +169,147 @@ class PlatformLinkService
     }
 
     /**
-     * Where Synaplan's servers call this ownCloud.online. Empty while this
-     * app takes no calls from Synaplan.
+     * Where Synaplan's servers call this ownCloud.online: the address the
+     * administrator set, or this server's own inbound route.
      */
     public function deliveryUrl(): string
     {
-        return '';
+        $configured = trim((string) $this->config->getAppValue(Application::APP_ID, 'delivery_url', ''));
+
+        return $configured !== '' ? $configured : $this->defaultDeliveryUrl();
+    }
+
+    /**
+     * Where people open one of their files from Synaplan. Synaplan may reach
+     * this ownCloud.online at another address than people use, so the address
+     * of its request is not it: overwrite.cli.url is, which ownCloud.online
+     * sets when it is installed.
+     */
+    public function openUrl(int $fileId): string
+    {
+        $path = $this->urlGenerator->linkToRoute('files.viewcontroller.showFile', ['fileId' => $fileId]);
+        $base = rtrim((string) $this->config->getSystemValue('overwrite.cli.url', ''), '/');
+        if ($base === '') {
+            return $this->urlGenerator->getAbsoluteURL($path);
+        }
+        $root = rtrim((string) parse_url($base, PHP_URL_PATH), '/');
+        if ($root !== '' && str_starts_with($path, $root . '/')) {
+            $path = substr($path, strlen($root));
+        }
+
+        return $base . $path;
+    }
+
+    public function defaultDeliveryUrl(): string
+    {
+        return $this->urlGenerator->linkToRouteAbsolute(Application::APP_ID . '.inbound.receive');
+    }
+
+    /**
+     * Synaplan's notification issuer and Ed25519 keys, from its two public
+     * documents.
+     *
+     * @return array{issuer: string, keys: list<array{publicKey: string, kid: string}>}
+     */
+    public function notificationTrust(): array
+    {
+        $accept = ['Accept' => 'application/json'];
+        $configuration = $this->request('GET', '/.well-known/synaplan-configuration', null, $accept);
+        $jwks = $this->request('GET', '/.well-known/jwks.json', null, $accept);
+        $keys = [];
+        foreach (is_array($jwks['keys'] ?? null) ? $jwks['keys'] : [] as $jwk) {
+            if (!is_array($jwk) || ($jwk['kty'] ?? '') !== 'OKP' || ($jwk['crv'] ?? '') !== 'Ed25519') {
+                continue;
+            }
+            $x = $jwk['x'] ?? null;
+            if (!is_string($x) || $x === '') {
+                continue;
+            }
+            $keys[] = [
+                'publicKey' => 'ed25519:' . $x,
+                'kid' => is_string($jwk['kid'] ?? null) ? $jwk['kid'] : '',
+            ];
+        }
+
+        return [
+            'issuer' => is_string($configuration['issuer'] ?? null) ? $configuration['issuer'] : '',
+            'keys' => $keys,
+        ];
+    }
+
+    /**
+     * Claim a copy Synaplan announced, with the person's own credential. A
+     * refusal comes back with its `status_code`.
+     *
+     * @return array<string, mixed>
+     */
+    public function claimDelivery(string $id, string $uid): array
+    {
+        return $this->request(
+            'POST',
+            '/api/v1/platform-links/deliveries/' . rawurlencode($id) . '/claim',
+            null,
+            $this->personHeaders($uid),
+            false,
+            true,
+        );
+    }
+
+    /**
+     * The bytes of a claimed copy, or null when they could not be fetched.
+     * The path must be that copy's own file: the request carries the
+     * person's credential, so a claim answer cannot point it at any other
+     * Synaplan address.
+     */
+    public function downloadDelivery(string $id, string $downloadPath, string $uid): ?string
+    {
+        $file = '/api/v1/platform-links/deliveries/' . rawurlencode($id) . '/file?ticket=';
+        if (!str_starts_with($downloadPath, $file)
+            || preg_match('/^[A-Za-z0-9_-]+$/', substr($downloadPath, strlen($file))) !== 1) {
+            $this->logger->warning('Refused a Synaplan copy download outside the copy\'s own path', [
+                'app' => Application::APP_ID,
+            ]);
+
+            return null;
+        }
+        $client = $this->clientService->newClient();
+        try {
+            $response = $client->get($this->synaplanConfig->getBaseUrl() . $downloadPath, [
+                'headers' => $this->personHeaders($uid),
+                'timeout' => self::DOWNLOAD_TIMEOUT,
+                'http_errors' => false,
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not download a Synaplan copy: {message}', [
+                'app' => Application::APP_ID,
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+        if ((int) $response->getStatusCode() !== 200) {
+            return null;
+        }
+
+        return (string) $response->getBody();
+    }
+
+    /**
+     * Tell Synaplan how a copy ended: `delivered` with where it is, or
+     * `failed` with one of its failure codes.
+     *
+     * @param array<string, mixed> $result
+     */
+    public function reportDelivery(string $id, string $uid, array $result): void
+    {
+        $this->request(
+            'POST',
+            '/api/v1/platform-links/deliveries/' . rawurlencode($id) . '/result',
+            $result,
+            array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
+            false,
+            true,
+        );
     }
 
     /**
@@ -231,19 +368,30 @@ class PlatformLinkService
 
     /**
      * Tell Synaplan where to call, which server this is, and what this app
-     * does (client configuration, RFC 7592).
+     * does (client configuration, RFC 7592). Synaplan refuses the whole
+     * change for a delivery address it does not call; the rest is then sent
+     * on its own, so what this app does is never held back by the address.
      */
     public function announce(): void
     {
         if (!$this->oauth->isRegistered()) {
             return;
         }
-        $this->oauth->updateConfiguration([
-            'delivery_url' => $this->deliveryUrl(),
+        $about = [
             'server_id' => $this->synaplanConfig->getInstanceId(),
             'app_capabilities' => self::CAPABILITIES,
             'software_version' => $this->appVersion(),
-        ]);
+        ];
+        try {
+            $this->oauth->updateConfiguration(['delivery_url' => $this->deliveryUrl()] + $about);
+        } catch (PlatformLinkException $e) {
+            if ($e->getErrorCode() !== PlatformLinkException::CODE_METADATA_REFUSED) {
+                throw $e;
+            }
+            $this->oauth->updateConfiguration($about);
+
+            throw new PlatformLinkException($e->getMessage(), PlatformLinkException::CODE_DELIVERY_REFUSED);
+        }
     }
 
     /**

@@ -15,6 +15,8 @@ declare(strict_types=1);
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Listener\UserDeletedListener;
 use OCA\OcoSynaplan\Listener\UserEnabledListener;
+use OCA\OcoSynaplan\Notification\CopyNotifier;
+use OCA\OcoSynaplan\Service\Notices;
 use OCP\IUser;
 use OCP\Util;
 use Symfony\Component\EventDispatcher\GenericEvent;
@@ -31,11 +33,22 @@ $dispatcher->addListener('OCA\Files::loadAdditionalScripts', function () {
     Util::addScript(Application::APP_ID, 'files-init');
 });
 
-// The chat launcher is on every page a signed-in person opens.
-if (!\OC::$CLI && \OC::$server->getUserSession()->getUser() !== null) {
+// The chat launcher is on every page a signed-in person opens, and so are
+// the notices of copies saved while the person was away.
+$signedIn = \OC::$CLI ? null : \OC::$server->getUserSession()->getUser();
+if ($signedIn !== null) {
     Util::addTranslations(Application::APP_ID);
     Util::addScript(Application::APP_ID, 'chat-launcher');
+    if ($container->query(Notices::class)->hasPending($signedIn->getUID())) {
+        Util::addScript(Application::APP_ID, 'notices');
+    }
 }
+
+// The sentences of this app's notifications, where the notifications app is installed.
+\OC::$server->getNotificationManager()->registerNotifier(
+    static fn () => $container->query(CopyNotifier::class),
+    static fn () => ['id' => Application::APP_ID, 'name' => 'Synaplan'],
+);
 
 // Synaplan hears when a person here is deleted, disabled or enabled again.
 \OC::$server->getUserManager()->listen('\OC\User', 'preDelete', function (IUser $user) use ($container) {

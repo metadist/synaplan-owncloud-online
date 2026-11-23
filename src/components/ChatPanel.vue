@@ -13,7 +13,7 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   html: string
-  media?: { url: string; proxyUrl: string; type: string; filename: string }
+  media?: { url: string; proxyUrl: string; type: 'image' | 'video' | 'audio' | 'file'; filename: string }
   failure?: Failure
 }
 
@@ -168,14 +168,20 @@ async function generateMedia(type: 'image' | 'video', prompt: string): Promise<v
       assistant.failure = describeFailure('synaplan_error')
       return
     }
-    const filename = prompt.slice(0, 40).replace(/[^\w-]+/g, '_') + (type === 'image' ? '.png' : '.mp4')
+    const extension =
+      res.file.url.match(/\.([a-z0-9]{1,8})(?:[?#]|$)/i)?.[1] ||
+      res.file.mimeType
+        ?.split('/')[1]
+        ?.replace(/^jpeg$/, 'jpg')
+        .replace(/[^a-z0-9].*$/i, '') ||
+      (type === 'image' ? 'png' : 'mp4')
     assistant.text = ''
     assistant.html = ''
     assistant.media = {
       url: res.file.url,
       proxyUrl: api.mediaProxyUrl(res.file.url),
-      type,
-      filename,
+      type: mediaKind(res.file.type, res.file.mimeType),
+      filename: (prompt.slice(0, 40).replace(/[^\w-]+/g, '_') || 'synaplan') + '.' + extension.toLowerCase(),
     }
   } catch (e) {
     assistant.text = ''
@@ -187,10 +193,16 @@ async function generateMedia(type: 'image' | 'video', prompt: string): Promise<v
   }
 }
 
+/** How a file Synaplan made is shown: played where the browser can, otherwise a link. */
+function mediaKind(type: string, mimeType: string): 'image' | 'video' | 'audio' | 'file' {
+  const kind = ['image', 'video', 'audio'].find((k) => type === k || mimeType?.startsWith(k + '/'))
+  return (kind as 'image' | 'video' | 'audio' | undefined) ?? 'file'
+}
+
 async function saveMedia(m: NonNullable<ChatMessage['media']>): Promise<void> {
   try {
     const res = await api.saveMedia(m.url, m.filename)
-    notify(t('Saved to {folder}', { folder: res.folder }))
+    notify(t('Saved to {folder}', { folder: res.folder || t('Files') }))
   } catch (e) {
     notify(failureFromError(e).text)
   }
@@ -246,7 +258,9 @@ function onKeydown(e: KeyboardEvent): void {
               class="synaplan-media"
               :alt="t('Generated image')"
             />
-            <video v-else :src="m.media.proxyUrl" class="synaplan-media" controls />
+            <video v-else-if="m.media.type === 'video'" :src="m.media.proxyUrl" class="synaplan-media" controls />
+            <audio v-else-if="m.media.type === 'audio'" :src="m.media.proxyUrl" controls />
+            <a v-else :href="m.media.proxyUrl" target="_blank" rel="noopener noreferrer">{{ m.media.filename }}</a>
             <div>
               <button class="oco-btn" @click="saveMedia(m.media)">{{ t('Save to Files') }}</button>
             </div>

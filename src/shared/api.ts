@@ -61,6 +61,34 @@ export interface Settings {
   link_registered: boolean
   link_instance_id: string
   link_instance: RegistrationStatus | null
+  /** Empty: Synaplan uses delivery_url_default. */
+  delivery_url: string
+  delivery_url_default: string
+}
+
+export interface SettingsSaved {
+  success: boolean
+  announce_error?: boolean
+  /** `invalid`: not a web address, not saved; `refused`: saved, but Synaplan does not call it. */
+  delivery_error?: '' | 'invalid' | 'refused'
+}
+
+/** A file of the person's in Synaplan, as the From Synaplan picker lists it. */
+export interface SynaplanFile {
+  id: number
+  name: string
+  generated: boolean
+  /** Unix seconds; 0 when Synaplan did not say. */
+  uploaded_at: number
+}
+
+export type SynaplanFileFilter = 'generated' | 'all'
+
+/** A copy Synaplan sent while the person was away, shown on their next page. */
+export interface CopyNotice {
+  name: string
+  folder: string
+  link: string
 }
 
 export interface LinkStatus {
@@ -159,10 +187,31 @@ export const api = {
 
   mediaProxyUrl: (mediaUrl: string) => url('/api/v1/media/proxy') + '?url=' + encodeURIComponent(mediaUrl),
 
+  // From Synaplan: the person's Synaplan files, copied into the folder that is open
+  listSynaplanFiles: (page: number, filter: SynaplanFileFilter, search: string) =>
+    apiFetch<{ files: SynaplanFile[]; page: number; pages: number }>(
+      '/api/v1/from-synaplan?' + new URLSearchParams({ page: String(page), filter, search }).toString(),
+    ),
+  copyFromSynaplan: (fileId: number, folder: string, name: string) =>
+    apiFetch<{ success: boolean; name: string; folder: string }>('/api/v1/from-synaplan', {
+      method: 'POST',
+      body: { fileId, folder, name },
+    }),
+
+  getPreferences: () => apiFetch<{ copy_folder: string }>('/api/v1/preferences'),
+  savePreferences: (copyFolder: string) =>
+    apiFetch<{ success: boolean; copy_folder: string }>('/api/v1/preferences', {
+      method: 'PUT',
+      body: { copy_folder: copyFolder },
+    }),
+
+  notices: () => apiFetch<{ notices: CopyNotice[] }>('/api/v1/notices'),
+  forgetNotices: (count: number) =>
+    apiFetch<{ success: boolean }>('/api/v1/notices', { method: 'DELETE', body: { count } }),
+
   // Settings (admin)
   getSettings: () => apiFetch<Settings>('/api/v1/settings'),
-  saveSettings: (body: Record<string, unknown>) =>
-    apiFetch<{ success: boolean; announce_error?: boolean }>('/api/v1/settings', { method: 'PUT', body }),
+  saveSettings: (body: Record<string, unknown>) => apiFetch<SettingsSaved>('/api/v1/settings', { method: 'PUT', body }),
   testConnection: () =>
     apiFetch<{ success: boolean; status?: string; error?: string; providers?: Record<string, boolean> }>(
       '/api/v1/settings/test',

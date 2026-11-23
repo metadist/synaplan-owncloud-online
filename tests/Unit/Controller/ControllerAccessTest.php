@@ -17,6 +17,8 @@ final class ControllerAccessTest extends TestCase
 {
     private const ADMIN = 'admin';
     private const PERSON = 'person';
+    /** Synaplan's servers, without a session: the signature on the body is the check. */
+    private const SERVER = 'server';
 
     /**
      * Route => who, then the exceptions to the defaults (CSRF checked, the
@@ -64,6 +66,15 @@ final class ControllerAccessTest extends TestCase
         'media#save' => [self::PERSON],
         // An <img> source: the browser sends no request token with it.
         'media#proxy' => [self::PERSON, ['NoCSRFRequired']],
+
+        'inbound#receive' => [self::SERVER],
+
+        'preferences#get' => [self::PERSON],
+        'preferences#save' => [self::PERSON],
+        'notices#list' => [self::PERSON],
+        'notices#clear' => [self::PERSON],
+        'fromSynaplan#list' => [self::PERSON],
+        'fromSynaplan#copy' => [self::PERSON],
     ];
 
     /**
@@ -90,6 +101,9 @@ final class ControllerAccessTest extends TestCase
         if ($who === self::PERSON) {
             $expected[] = 'NoAdminRequired';
         }
+        if ($who === self::SERVER) {
+            array_push($expected, 'NoCSRFRequired', 'PublicPage');
+        }
         sort($expected);
 
         self::assertSame($expected, $annotations, $name . ' (' . $verb . ' ' . $url . ')');
@@ -98,17 +112,21 @@ final class ControllerAccessTest extends TestCase
     #[DataProvider('routes')]
     public function testOnlyBrowserNavigationsSkipTheCsrfCheck(string $name, string $verb): void
     {
-        if (in_array('NoCSRFRequired', $this->annotations($name), true)) {
+        if ((self::ACCESS[$name][0] ?? '') === self::SERVER) {
+            self::assertSame('POST', $verb, $name . ' is called by Synaplan with a signed body');
+        } elseif (in_array('NoCSRFRequired', $this->annotations($name), true)) {
             self::assertSame('GET', $verb, $name . ' changes state without the CSRF check');
         } else {
             $this->addToAssertionCount(1);
         }
     }
 
-    public function testNoPageIsPublic(): void
+    public function testOnlySynaplansCallsArePublic(): void
     {
         foreach (array_keys(self::routes()) as $name) {
-            self::assertNotContains('PublicPage', $this->annotations($name), $name);
+            if ((self::ACCESS[$name][0] ?? '') !== self::SERVER) {
+                self::assertNotContains('PublicPage', $this->annotations($name), $name);
+            }
         }
     }
 

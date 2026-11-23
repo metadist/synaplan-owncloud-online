@@ -35,6 +35,10 @@ describe('describeFailure', () => {
     'file_empty',
     'no_text',
     'translation_unavailable',
+    'copy_too_large',
+    'quota_exceeded',
+    'name_taken',
+    'folder_read_only',
   ])('gives %s a sentence of its own', (code) => {
     const { text } = describeFailure(code)
 
@@ -47,6 +51,15 @@ describe('describeFailure', () => {
     expect(describeFailure('admin_key_missing').text).toBe(
       'Synaplan could not set up your account: this ownCloud.online has no key that can create accounts.',
     )
+    expect(describeFailure('quota_exceeded').text).toBe(
+      'Your ownCloud.online storage is full. Nothing was copied. Free some space, then copy again.',
+    )
+  })
+
+  it('says a refused copy left nothing behind, and what to do instead', () => {
+    for (const code of ['copy_too_large', 'quota_exceeded', 'name_taken', 'folder_read_only']) {
+      expect(describeFailure(code).text).toContain('Nothing was copied.')
+    }
   })
 
   it("adds Synaplan's reason after the sentence for a known failure", () => {

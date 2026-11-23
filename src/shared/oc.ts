@@ -28,6 +28,21 @@ export function translate(text: string, vars?: Record<string, unknown>): string 
   return text.replace(/\{(\w+)\}/g, (match, key: string) => (vars && key in vars ? String(vars[key]) : match))
 }
 
+/** "2 hours ago" in the words ownCloud.online uses for dates, or '' where it has none. */
+export function relativeDate(milliseconds: number): string {
+  return OC.Util?.relativeModifiedDate?.(milliseconds) ?? ''
+}
+
+/** Whether ownCloud.online's own folder picker is on this page. */
+export function canPickFolder(): boolean {
+  return typeof OC.dialogs?.filepicker === 'function'
+}
+
+/** ownCloud.online's own folder picker; `picked` gets the folder, such as "/Projects". */
+export function pickFolder(title: string, picked: (folder: string) => void): void {
+  OC.dialogs?.filepicker?.(title, picked, false, 'httpd/unix-directory', true)
+}
+
 /** Show a transient toast. */
 export function notify(text: string): void {
   try {

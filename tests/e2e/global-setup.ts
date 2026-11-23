@@ -106,10 +106,13 @@ export default async function globalSetup(): Promise<void> {
   // and so does ownCloud.online's container reach Synaplan.
   const internal = new URL(SYNAPLAN_URL)
   internal.hostname = 'host.docker.internal'
+  const inbound = new URL(`${APP}/api/v1/inbound`, OCO_URL)
+  inbound.hostname = 'host.docker.internal'
   await saveSettings({
     active_env: 'local',
     synaplan_url_local: internal.origin,
     synaplan_public_url_local: new URL(SYNAPLAN_URL).origin,
+    delivery_url: inbound.href,
     api_key_local: apiKey.key,
     mode: 'link',
     per_user_accounts: true,

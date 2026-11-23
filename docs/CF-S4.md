@@ -75,8 +75,13 @@ and answers the sidebar questions of `04` §A.4 from
 `apps/files/js/newfilemenu.js` attaches plugins registered for
 `OCA.Files.NewFileMenu` (80:86); a plugin calls
 `menu.addMenuEntry({ id, displayName, templateName, iconClass, fileType, actionHandler })`
-(231:245). `actionHandler(name)` runs when the entry is chosen. The app adds
-**From Synaplan…**, which opens its own dialog instead of creating a file.
+(231:245). `actionHandler(name)` does not run when the entry is chosen: a
+click first opens the menu's field for a file name (`_onClickAction`), and
+the handler runs once that name is submitted. **From Synaplan…** creates no
+file, so the app wraps `_onClickAction` for its own entry, opens its dialog
+on the open folder instead, and binds the menu's events again
+(`delegateEvents`), since the menu bound its click handler before plugins
+attach.
 
 ## 4. File hooks — yes
 
@@ -156,7 +161,12 @@ minute on a cron installation).
 Route `files.viewcontroller.showFile`, `/f/{fileId}` (`core/routes.php:103`):
 `IURLGenerator::linkToRouteAbsolute('files.viewcontroller.showFile', ['fileId' => $id])`
 gives `https://<host>/index.php/f/<fileid>`, which opens the file's folder with
-the file selected for anyone who can see it.
+the file selected for anyone who can see it. `<host>` is the host of the
+request the link is made in. A copy is written while Synaplan calls this
+server, possibly at another address than people use (the delivery address),
+so the `open_url` the app reports is built on `overwrite.cli.url`, which
+ownCloud.online sets when it is installed, and a notice links to the file
+by its id when the person's page shows it.
 
 ## 9. User disabled / re-enabled — yes
 

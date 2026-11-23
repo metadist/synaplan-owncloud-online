@@ -10,6 +10,7 @@ use OCA\OcoSynaplan\Service\UserAccountService;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
 use OCP\Http\Client\IResponse;
+use OCP\IURLGenerator;
 use PHPUnit\Framework\TestCase;
 
 final class PlatformLinkServiceTest extends TestCase
@@ -138,6 +139,130 @@ final class PlatformLinkServiceTest extends TestCase
 
         self::assertSame(['id' => 5, 'email' => 'ada@synaplan.example.org'], $this->links()->whoAmI('ada'));
         self::assertSame('Bearer access-ada', $this->http->to('/api/v1/auth/me')[0]['options']['headers']['Authorization']);
+    }
+
+    public function testACopyIsClaimedFetchedAndReportedWithThePersonsOwnCredential(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada');
+        $this->http->answer(static fn (string $method, string $path): array|IResponse => match ($path) {
+            '/api/v1/platform-links/deliveries/9/claim' => ['id' => '9', 'external_id' => 'ada', 'download_path' => '/api/v1/platform-links/deliveries/9/file?ticket=t_1'],
+            '/api/v1/platform-links/deliveries/9/file' => RecordingHttp::response(200, 'bytes'),
+            default => ['status' => 'delivered'],
+        });
+
+        $claim = $this->links()->claimDelivery('9', 'ada');
+        $bytes = $this->links()->downloadDelivery('9', $claim['download_path'], 'ada');
+        $this->links()->reportDelivery('9', 'ada', ['status' => 'delivered', 'remote_path' => '/Synaplan/plan.docx']);
+
+        self::assertSame('bytes', $bytes);
+        foreach ($this->http->calls as $call) {
+            self::assertSame('Bearer access-ada', $call['options']['headers']['Authorization'], $call['path']);
+        }
+        self::assertSame(['POST', 'GET', 'POST'], array_column($this->http->calls, 'method'));
+        self::assertSame(self::SYNAPLAN . '/api/v1/platform-links/deliveries/9/file?ticket=t_1', $this->http->calls[1]['url']);
+        self::assertSame(['status' => 'delivered', 'remote_path' => '/Synaplan/plan.docx'], $this->http->calls[2]['body']);
+    }
+
+    public function testAClaimSynaplanRefusesComesBackWithItsStatus(): void
+    {
+        $this->register();
+        $this->connect('ada');
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(409, '{"error":"already_claimed"}'));
+
+        self::assertSame(['status_code' => 409, 'error' => 'already_claimed'], $this->links()->claimDelivery('9', 'ada'));
+    }
+
+    public function testTheCredentialOnlyGoesToTheCopysOwnFile(): void
+    {
+        $this->register();
+        $this->connect('ada');
+
+        foreach ([
+            '/api/v1/files/7/download',
+            '/api/v1/platform-links/deliveries/10/file?ticket=t_1',
+            '/api/v1/platform-links/deliveries/9/file?ticket=t_1&next=https://elsewhere.example',
+            '/api/v1/platform-links/deliveries/9/file?ticket=',
+            'https://elsewhere.example/api/v1/platform-links/deliveries/9/file?ticket=t_1',
+        ] as $path) {
+            self::assertNull($this->links()->downloadDelivery('9', $path, 'ada'), $path);
+        }
+        self::assertSame([], $this->http->calls);
+    }
+
+    public function testSynaplanCallsThisServerAtItsOwnRouteUnlessAnAddressIsSet(): void
+    {
+        self::assertSame($this->links()->defaultDeliveryUrl(), $this->links()->deliveryUrl());
+        self::assertStringEndsWith('/index.php/route/oco_synaplan.inbound.receive', $this->links()->deliveryUrl());
+
+        $this->config->setAppValue('oco_synaplan', 'delivery_url', 'https://cloud.example/index.php/apps/oco_synaplan/api/v1/inbound');
+        self::assertSame('https://cloud.example/index.php/apps/oco_synaplan/api/v1/inbound', $this->links()->deliveryUrl());
+    }
+
+    public function testTheDefaultAddressIsThisServersOwnRouteAlsoOnLocalhost(): void
+    {
+        $urls = $this->createStub(IURLGenerator::class);
+        $urls->method('linkToRouteAbsolute')->willReturn('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound');
+        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger());
+
+        self::assertSame('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound', $links->defaultDeliveryUrl());
+        self::assertSame('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound', $links->deliveryUrl());
+    }
+
+    public function testACopyOpensAtTheAddressPeopleUseNotTheOneSynaplanCalled(): void
+    {
+        $urls = $this->createStub(IURLGenerator::class);
+        $urls->method('linkToRoute')->willReturnCallback(
+            static fn (string $route, array $parameters): string => $route === 'files.viewcontroller.showFile' ? '/cloud/index.php/f/' . $parameters['fileId'] : '',
+        );
+        $urls->method('getAbsoluteURL')->willReturnCallback(static fn (string $path): string => 'http://host.docker.internal:8083' . $path);
+        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger());
+
+        self::assertSame('http://host.docker.internal:8083/cloud/index.php/f/42', $links->openUrl(42), 'without overwrite.cli.url only the request tells');
+
+        $this->config->setSystemValue('overwrite.cli.url', 'https://cloud.example/cloud/');
+        self::assertSame('https://cloud.example/cloud/index.php/f/43', $links->openUrl(43));
+
+        $this->config->setSystemValue('overwrite.cli.url', 'https://cloud.example');
+        self::assertSame('https://cloud.example/cloud/index.php/f/44', $links->openUrl(44));
+    }
+
+    public function testAnAddressSynaplanRefusesIsLeftOutAndTheRestIsStillSent(): void
+    {
+        $this->register();
+        $this->http->answer(static fn (string $method, string $path, array $options): array|IResponse => str_contains((string) ($options['body'] ?? ''), 'delivery_url')
+            ? RecordingHttp::response(400, '{"error":"invalid_client_metadata","error_description":"That address is not on this cloud."}')
+            : ['client_id' => 'client-1']);
+
+        try {
+            $this->links()->announce();
+            self::fail('A refused address must be reported');
+        } catch (PlatformLinkException $e) {
+            self::assertSame(PlatformLinkException::CODE_DELIVERY_REFUSED, $e->getErrorCode());
+        }
+
+        [$first, $second] = $this->http->to('/oauth/register/client-1');
+        self::assertArrayHasKey('delivery_url', $first['body']);
+        self::assertArrayNotHasKey('delivery_url', $second['body']);
+        self::assertSame(PlatformLinkService::CAPABILITIES, $second['body']['app_capabilities']);
+    }
+
+    public function testNotificationKeysAreTheEd25519KeysOfSynaplansPublicDocuments(): void
+    {
+        $this->http->answer(static fn (string $method, string $path): array => match ($path) {
+            '/.well-known/synaplan-configuration' => ['issuer' => self::SYNAPLAN],
+            default => ['keys' => [
+                ['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => 'abc', 'kid' => 'k1'],
+                ['kty' => 'RSA', 'n' => 'xyz', 'e' => 'AQAB', 'kid' => 'k2'],
+                ['kty' => 'OKP', 'crv' => 'X25519', 'x' => 'def', 'kid' => 'k3'],
+                ['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => ''],
+            ]],
+        });
+
+        self::assertSame(
+            ['issuer' => self::SYNAPLAN, 'keys' => [['publicKey' => 'ed25519:abc', 'kid' => 'k1']]],
+            $this->links()->notificationTrust(),
+        );
     }
 
     public function testLeavingSynaplanEndsTheRegistrationThereAndForgetsTheKeyHere(): void

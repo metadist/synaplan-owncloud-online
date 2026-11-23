@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\MediaController;
+use OCA\OcoSynaplan\Service\SynaplanFolders;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
@@ -45,6 +46,6 @@ final class MediaControllerTest extends TestCase
 
     private function controller(): MediaController
     {
-        return new MediaController($this->createStub(IRequest::class), $this->client(), $this->createStub(IRootFolder::class), $this->session(), $this->logger());
+        return new MediaController($this->createStub(IRequest::class), $this->client(), $this->createStub(IRootFolder::class), $this->session(), new SynaplanFolders($this->config), $this->logger());
     }
 }

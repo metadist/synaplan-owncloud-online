@@ -11,6 +11,8 @@ use OCA\OcoSynaplan\Service\UserAccountService;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\HttpErrorException;
+use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
+use OCP\Http\Client\IResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -233,6 +235,17 @@ final class SynaplanClientTest extends TestCase
         foreach ($refused as $path) {
             self::assertFalse(SynaplanClient::isSynaplanPath($path), $path);
         }
+    }
+
+    public function testAFileToSaveLargerThanTheLimitIsRefusedAndOneToShowIsNotLimited(): void
+    {
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(200, str_repeat('x', 11)));
+
+        $this->assertFailure(Failure::COPY_TOO_LARGE, fn () => $this->client()->downloadFile('/api/v1/files/uploads/1/song.mp3', 10));
+        self::assertArrayHasKey('on_headers', $this->http->calls[0]['options'], 'an announced length is refused before the body is read');
+
+        self::assertSame(11, strlen($this->nextRequest()->downloadFile('/api/v1/files/uploads/1/song.mp3')));
+        self::assertArrayNotHasKey('on_headers', $this->http->calls[1]['options']);
     }
 
     public function testAProvisionedKeyWithoutMemoriesIsReplacedWhenSynaplanAsksForTheScope(): void

@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\AppInfo;
 
+use OCA\OcoSynaplan\Service\SeenNotifications;
+use OCA\OcoSynaplan\Service\SeenNotificationStore;
 use OCP\AppFramework\App;
 use OCP\Lock\ILockingProvider;
 
@@ -38,5 +40,6 @@ class Application extends App
             ILockingProvider::class,
             static fn () => \OC::$server->getLockingProvider()
         );
+        $this->getContainer()->registerAlias(SeenNotificationStore::class, SeenNotifications::class);
     }
 }

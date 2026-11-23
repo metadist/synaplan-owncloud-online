@@ -1,8 +1,11 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 
 import { expect, request } from '@playwright/test'
+import { spawnSync } from 'node:child_process'
 
 export const OCO_URL = process.env.OCO_URL ?? 'http://localhost:8083'
+/** The ownCloud.online container of the dev stack (docker-compose.dev.yml). */
+const OCO_CONTAINER = process.env.OCO_CONTAINER ?? 'synaplan-owncloud-dev'
 /** Only ever the Synaplan test stack: the journeys create keys and register this server there. */
 export const SYNAPLAN_URL = process.env.E2E_SYNAPLAN_URL ?? 'http://localhost:8001'
 export const APP = '/index.php/apps/oco_synaplan'
@@ -192,6 +195,18 @@ export async function deleteUser(uid: string): Promise<void> {
       `deleting ${uid}: HTTP ${response.status()}`,
     ).not.toContain(uid)
   })
+}
+
+/** Run an occ command in the dev stack's ownCloud.online container. */
+export function occ(...args: string[]): string {
+  const run = spawnSync('docker', ['exec', '-u', 'www-data', OCO_CONTAINER, 'php', 'occ', ...args], {
+    encoding: 'utf8',
+  })
+  if (run.status !== 0) {
+    const reason = (run.stderr || run.error?.message || '').trim()
+    throw new Error(`occ ${args.join(' ')} in ${OCO_CONTAINER} failed; set OCO_CONTAINER. ${reason}`)
+  }
+  return run.stdout
 }
 
 /** Sign in on the ownCloud.online login page. */

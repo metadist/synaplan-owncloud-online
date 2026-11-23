@@ -13,6 +13,10 @@ namespace OCA\OcoSynaplan\Exception;
 
 use OCA\OcoSynaplan\Http\Failure;
 use OCP\AppFramework\Http;
+use OCP\Files\AlreadyExistsException;
+use OCP\Files\ForbiddenException;
+use OCP\Files\NotEnoughSpaceException;
+use OCP\Files\NotPermittedException;
 
 /**
  * A state the app recognises itself, with the failure the browser gets. The
@@ -60,6 +64,31 @@ final class FailureException extends \RuntimeException
             new Failure(Http::STATUS_REQUEST_ENTITY_TOO_LARGE, Failure::FILE_TOO_LARGE),
             'File larger than ' . $maxBytes . ' bytes',
         );
+    }
+
+    public static function copyTooLarge(int $maxBytes): self
+    {
+        return new self(
+            new Failure(Http::STATUS_REQUEST_ENTITY_TOO_LARGE, Failure::COPY_TOO_LARGE),
+            'File from Synaplan larger than ' . $maxBytes . ' bytes',
+        );
+    }
+
+    /**
+     * What writing a file from Synaplan into the person's files ran into, as
+     * the person's failure; anything else is returned unchanged. Reading
+     * throws the same exceptions with another meaning, so only writes ask.
+     */
+    public static function fromWrite(\Throwable $e): \Throwable
+    {
+        $failure = match (true) {
+            $e instanceof NotEnoughSpaceException => new Failure(Http::STATUS_INSUFFICIENT_STORAGE, Failure::QUOTA_EXCEEDED),
+            $e instanceof AlreadyExistsException => new Failure(Http::STATUS_CONFLICT, Failure::NAME_TAKEN),
+            $e instanceof NotPermittedException, $e instanceof ForbiddenException => new Failure(Http::STATUS_FORBIDDEN, Failure::FOLDER_READ_ONLY),
+            default => null,
+        };
+
+        return $failure === null ? $e : new self($failure, 'Could not write the file: ' . $e->getMessage());
     }
 
     public static function unsupportedType(string $mimeType): self

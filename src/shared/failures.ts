@@ -100,6 +100,24 @@ export function describeFailure(code?: string, message?: string): Failure {
       return { text: t('Synaplan found no text in this file. It may be a scan or protected by a password.') }
     case 'translation_unavailable':
       return { text: t('This Synaplan cannot translate a file. Ask your administrator.') }
+    case 'copy_too_large':
+      return {
+        text: t(
+          'This file is larger than 100 MB. Nothing was copied. Download it from Synaplan and upload it yourself.',
+        ),
+      }
+    case 'quota_exceeded':
+      return {
+        text: t('Your {app} storage is full. Nothing was copied. Free some space, then copy again.', { app: APP_NAME }),
+      }
+    case 'name_taken':
+      return {
+        text: t(
+          'Twenty files with this name already exist. Nothing was copied. Rename the file in Synaplan and copy again.',
+        ),
+      }
+    case 'folder_read_only':
+      return { text: t('You cannot add files to this folder. Nothing was copied. Choose another folder.') }
   }
   if (message) {
     return { text: message }

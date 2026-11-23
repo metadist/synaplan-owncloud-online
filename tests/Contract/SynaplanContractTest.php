@@ -8,8 +8,10 @@ use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Controller\ChatController;
 use OCA\OcoSynaplan\Http\SseProxyResponse;
 use OCA\OcoSynaplan\Listener\UserDeletedListener;
+use OCA\OcoSynaplan\Service\CopyDelivery;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\LanguageService;
+use OCA\OcoSynaplan\Service\LibraryImport;
 use OCA\OcoSynaplan\Service\OAuthClient;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanCredential;
@@ -38,11 +40,17 @@ final class SynaplanContractTest extends TestCase
 
     /**
      * Calls made with a person's credential that contract v1 (the vendored
-     * paths.json) does not list yet. Both answer on the pinned Synaplan.
+     * paths.json) does not list yet. All answer on the pinned Synaplan; the
+     * files and delivery routes with the `files` scope (ApiKeyScope).
      */
     private const OUTSIDE_THE_CONTRACT = [
         'DELETE /api/v1/apikeys/{id}',
         'GET /api/v1/auth/me',
+        'GET /api/v1/files',
+        'GET /api/v1/files/{id}/download',
+        'GET /api/v1/platform-links/deliveries/{id}/file',
+        'POST /api/v1/platform-links/deliveries/{id}/claim',
+        'POST /api/v1/platform-links/deliveries/{id}/result',
     ];
 
     private const CALLBACK = 'http://localhost:8083/apps/oco_synaplan/public/link-return.html';
@@ -71,6 +79,8 @@ final class SynaplanContractTest extends TestCase
         $violations = [];
         foreach ($this->http->calls as $call) {
             array_push($violations, ...$contract->violations($call['method'], $call['path'], $call['body'], $call['multipart'], $call['form']));
+            parse_str((string) parse_url($call['url'], PHP_URL_QUERY), $query);
+            array_push($violations, ...$contract->queryViolations($call['method'], $call['path'], array_map('strval', array_keys($query))));
         }
 
         self::assertSame([], array_values(array_unique($violations)));
@@ -267,6 +277,18 @@ final class SynaplanContractTest extends TestCase
             fn () => $client->uploadFile('report.pdf', '%PDF', 'Contracts', 'vectorize', '/Projects/report.pdf', '7', 'etag-1', true),
             fn () => $client->generateMedia('A cat', 'image', 3),
             fn () => $client->downloadFile('/api/v1/files/uploads/7/cat.png'),
+            fn () => (new LibraryImport($client, $this->createStub(IRootFolder::class), $this->logger()))->list(2, 'generated', 'plan'),
+            fn () => $client->downloadStoredFile(42, CopyDelivery::MAX_BYTES),
+            fn () => $links->notificationTrust(),
+            fn () => $links->claimDelivery('17', 'ada'),
+            fn () => $links->downloadDelivery('17', '/api/v1/platform-links/deliveries/17/file?ticket=t-1', 'ada'),
+            fn () => $links->reportDelivery('17', 'ada', [
+                'status' => 'delivered',
+                'remote_path' => '/Synaplan/Images/cat.png',
+                'remote_id' => '9',
+                'open_url' => 'http://localhost:8083/index.php/f/9',
+            ]),
+            fn () => $links->reportDelivery('18', 'ada', ['status' => 'failed', 'error_code' => 'quota_exceeded']),
             fn () => $accounts->fetchUsage(7),
             fn () => $accounts->adoptLegacyAccount('ada'),
             fn () => $accounts->renewProvisionedKey(),
@@ -409,14 +431,16 @@ final class SynaplanContractTest extends TestCase
                     : $call[1][0] . ' ' . $template;
             }
             preg_match_all(
-                '/getBaseUrl\(\)\s*\.\s*\'(\/(?:api|v1)\/[^\']*)\'/',
+                '/getBaseUrl\(\)\s*\.\s*(?=\'\/(?:api|v1)\/)/',
                 $source,
                 $urls,
                 PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
             );
             foreach ($urls as $url) {
+                $expression = self::readArgument($source, $url[0][1] + strlen($url[0][0]));
+                $template = self::templateFromExpression($expression);
                 $verb = self::verbBeside($source, $url[0][1]);
-                $operations[] = $verb === null ? 'UNPARSED ' . $url[1][0] : $verb . ' ' . $url[1][0];
+                $operations[] = $verb === null || $template === null ? 'UNPARSED ' . $expression : $verb . ' ' . $template;
             }
         }
 
@@ -476,7 +500,7 @@ final class SynaplanContractTest extends TestCase
                 $argument .= $character;
                 continue;
             }
-            if ($character === ',' && $depth === 0) {
+            if (($character === ',' || $character === ';') && $depth === 0) {
                 break;
             }
             $argument .= $character;

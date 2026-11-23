@@ -596,6 +596,7 @@ class OAuthClient
             // everybody and must not cost each person their connection.
             $code = match (true) {
                 $error === 'invalid_grant' => PlatformLinkException::CODE_GRANT_ENDED,
+                $error === 'invalid_client_metadata' && $status === 400 => PlatformLinkException::CODE_METADATA_REFUSED,
                 $asClient && $status === 401 => PlatformLinkException::CODE_CLIENT_REFUSED,
                 default => PlatformLinkException::CODE_EXCHANGE,
             };

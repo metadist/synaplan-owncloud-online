@@ -24,6 +24,21 @@ interface OcFileAction {
   actionHandler(fileName: string, context: unknown): void
 }
 
+/** The Files app's New menu (apps/files/js/newfilemenu.js), a Backbone view. */
+interface OcNewFileMenu {
+  fileList?: { getCurrentDirectory?: () => string; reload?: () => unknown }
+  addMenuEntry: (entry: {
+    id: string
+    displayName: string
+    templateName: string
+    iconClass: string
+    fileType: string
+    actionHandler: (name: string) => void
+  }) => void
+  _onClickAction: (event: Event) => void
+  delegateEvents: () => unknown
+}
+
 interface OcGlobal {
   requestToken: string
   generateUrl: (path: string, params?: Record<string, unknown>) => string
@@ -32,10 +47,25 @@ interface OcGlobal {
   PERMISSION_READ: number
   PERMISSION_UPDATE: number
   Notification: {
-    showTemporary: (text: string, options?: Record<string, unknown>) => unknown
+    showTemporary: (text: string, options?: { timeout?: number; isHTML?: boolean; type?: string }) => unknown
     show: (text: string) => unknown
   }
-  dialogs?: Record<string, unknown>
+  Plugins?: {
+    register: (target: string, plugin: { attach: (instance: OcNewFileMenu) => void }) => void
+  }
+  Util?: {
+    relativeModifiedDate?: (timestamp: number) => string
+  }
+  hideMenus?: () => void
+  dialogs?: {
+    filepicker?: (
+      title: string,
+      callback: (target: string) => void,
+      multiselect: boolean,
+      mimetypeFilter: string,
+      modal: boolean,
+    ) => void
+  }
   currentUser?: string
 }
 

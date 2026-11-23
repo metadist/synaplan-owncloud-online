@@ -489,35 +489,83 @@ class SynaplanClient
      * Download a file from Synaplan by its relative upload path.
      *
      * @param string $relativePath Relative file URL (e.g. "/api/v1/files/uploads/...")
+     * @param int|null $maxBytes larger files are refused, see {@see self::download()}
      * @return string Raw binary content
      * @throws \Exception on download failure
      */
-    public function downloadFile(string $relativePath): string
+    public function downloadFile(string $relativePath, ?int $maxBytes = null): string
     {
         if (!self::isSynaplanPath($relativePath)) {
             throw new \InvalidArgumentException('Not a Synaplan path: ' . $relativePath);
         }
-        $client = $this->clientService->newClient();
-        $url = $this->getBaseUrl() . $relativePath;
 
+        return $this->download($relativePath, $maxBytes);
+    }
+
+    /**
+     * One page of the person's files in Synaplan, newest first.
+     *
+     * @param array<string, scalar> $filters `source` (`generated`) and `search`
+     * @return array<string, mixed>
+     */
+    public function listRecentFiles(int $page = 1, array $filters = []): array
+    {
+        return $this->request('GET', '/api/v1/files', null, true, [
+            'page' => max(1, $page),
+            'limit' => 50,
+        ] + $filters);
+    }
+
+    /**
+     * The bytes of one file the person owns in Synaplan.
+     */
+    public function downloadStoredFile(int $id, int $maxBytes): string
+    {
+        return $this->download('/api/v1/files/' . $id . '/download', $maxBytes);
+    }
+
+    /**
+     * A file larger than $maxBytes is refused from its announced length,
+     * before the body is read, and again by what arrived when no length was
+     * announced.
+     */
+    private function download(string $path, ?int $maxBytes): string
+    {
         $options = [
             'headers' => SynaplanCredential::header($this->requireApiKey()),
             'timeout' => self::MEDIA_TIMEOUT,
         ];
-
+        if ($maxBytes !== null) {
+            $options['on_headers'] = static function (mixed $response) use ($maxBytes): void {
+                $length = is_object($response) && method_exists($response, 'getHeaderLine')
+                    ? (string) $response->getHeaderLine('Content-Length')
+                    : '';
+                if ($length !== '' && (int) $length > $maxBytes) {
+                    throw FailureException::copyTooLarge($maxBytes);
+                }
+            };
+        }
         try {
-            $response = $client->get($url, $options);
-
-            return (string) $response->getBody();
+            $response = $this->clientService->newClient()->get($this->getBaseUrl() . $path, $options);
         } catch (\Exception $e) {
+            $previous = $e->getPrevious();
+            if ($previous instanceof FailureException) {
+                throw $previous;
+            }
             $this->logger->error('Synaplan file download failed: {message}', [
                 'app' => Application::APP_ID,
                 'message' => $e->getMessage(),
-                'path' => $relativePath,
+                'path' => $path,
             ]);
 
             throw $this->refusedKey($e) ?? $e;
         }
+        $bytes = (string) $response->getBody();
+        if ($maxBytes !== null && strlen($bytes) > $maxBytes) {
+            throw FailureException::copyTooLarge($maxBytes);
+        }
+
+        return $bytes;
     }
 
     /**

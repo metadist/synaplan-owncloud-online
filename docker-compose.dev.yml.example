@@ -11,7 +11,9 @@
 #
 # UI: http://localhost:8083 — admin / admin; ada, bob, carol / <name>-dev-pass.
 # The app reaches Synaplan at SYNAPLAN_URL_LOCAL (default: a Synaplan API
-# published on the Docker host, http://host.docker.internal:8000).
+# published on the Docker host, http://host.docker.internal:8000), and
+# Synaplan sends copies to SYNAPLAN_DELIVERY_URL (default: this server on the
+# Docker host, http://host.docker.internal:8083/...).
 #
 # The app is mounted over apps/oco_synaplan of the checkout. Config and data
 # live in volumes, so `make dev-reset` never touches the checkout.
@@ -33,6 +35,7 @@ x-owncloud: &owncloud
     OCO_TAG: ${OCO_TAG:-v11.0.10}
     SYNAPLAN_URL_LOCAL: ${SYNAPLAN_URL_LOCAL:-http://host.docker.internal:8000}
     SYNAPLAN_PUBLIC_URL_LOCAL: ${SYNAPLAN_PUBLIC_URL_LOCAL:-}
+    SYNAPLAN_DELIVERY_URL: ${SYNAPLAN_DELIVERY_URL:-http://host.docker.internal:8083/index.php/apps/oco_synaplan/api/v1/inbound}
   extra_hosts:
     - host.docker.internal:host-gateway
   restart: unless-stopped

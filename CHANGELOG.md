@@ -32,6 +32,19 @@ All notable changes to this project are documented here. The format is based on
 - The chat launcher on every page for signed-in people.
 - German (informal and formal), Spanish, French and Turkish, in the words
   Synaplan itself uses.
+- **Copies from Synaplan**: *Copy to cloud* in Synaplan saves the file into the
+  person's files, in a folder for its kind under `Synaplan/` or under the
+  folder they choose in Settings → Personal → Synaplan, next to an earlier copy
+  as `name (2)`. Their next page says what was copied where, with a link; with
+  the notifications app the notice goes there.
+- **New → From Synaplan…** in Files adds Synaplan files to the open folder, the
+  ones Synaplan made first.
+- **Save to Files** in the chat saves images, videos, audio, documents and
+  calendar files, each into the folder for its kind.
+- **Address Synaplan uses to reach this ownCloud.online** in the admin screen,
+  for a Synaplan that reaches this server at another address than people use.
+- Notices from Synaplan are signed and checked; a connection that ended in
+  Synaplan asks the person to connect again on their next action.
 
 ### Changed
 

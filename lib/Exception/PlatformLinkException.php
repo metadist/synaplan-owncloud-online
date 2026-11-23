@@ -32,6 +32,13 @@ class PlatformLinkException extends \RuntimeException
     public const CODE_NOT_REGISTERED = 'not_registered';
     /** The person did not allow the connection on Synaplan's consent page. */
     public const CODE_DENIED = 'denied';
+    /** Synaplan refused what this server said about itself (RFC 7591 invalid_client_metadata). */
+    public const CODE_METADATA_REFUSED = 'metadata_refused';
+    /**
+     * Synaplan does not call the delivery address: it is not on this
+     * server's registered host, and its administrator has not approved it.
+     */
+    public const CODE_DELIVERY_REFUSED = 'delivery_refused';
 
     public function __construct(
         string $message,

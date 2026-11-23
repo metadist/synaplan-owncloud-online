@@ -15,6 +15,8 @@ Bring Synaplan's AI capabilities directly into ownCloud.online:
 - Summarize documents with one click
 - Translate files to multiple languages
 - Make searchable by AI — let Synaplan answer from your files
+- Files from Synaplan — copies sent from Synaplan land in your files, and
+  New → From Synaplan… adds Synaplan files to the folder you are in
 - Research Chat — AI assistant with knowledge folder and model selection,
   optional personal memories, and live status (model, language, image/video)
 - Configurable answer language — set a default and optionally follow each
@@ -52,6 +54,7 @@ Requires a running Synaplan server.
 	</repair-steps>
 	<background-jobs>
 		<job>OCA\OcoSynaplan\BackgroundJob\AdoptIdentitiesJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\RefreshNotifyKeysJob</job>
 	</background-jobs>
 	<navigation>
 		<name>Synaplan</name>

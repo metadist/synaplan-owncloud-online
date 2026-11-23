@@ -15,7 +15,15 @@ talks to the **Synaplan backend API**.
 - **Research Chat** — a full-page AI assistant **and** a floating in-page
   launcher, with knowledge-group and model selection, streaming answers, and
   optional personal memories. `/pic` and `/vid` generate images and videos when
-  the corresponding models are configured, with one-click "Save to Files".
+  the corresponding models are configured, with one-click "Save to Files"
+  into the folder for the file's kind.
+- **Copies from Synaplan** — *Copy to cloud* in Synaplan saves a file into the
+  person's files: under `Synaplan/`, in a folder for its kind (Documents,
+  Images, Audio, Video, Calendar), or under a folder they choose in
+  Settings → Personal → Synaplan. Their next page says what was copied where,
+  with a link to the file.
+- **New → From Synaplan…** in Files adds files from Synaplan, the ones it made
+  first, to the open folder.
 - **Configurable answer language** — set a default and optionally follow each
   user's ownCloud.online interface language.
 - **How people use Synaplan** — the administrator picks one of the modes the
@@ -33,6 +41,9 @@ talks to the **Synaplan backend API**.
 - A running [Synaplan](https://synaplan.com) 5.8 or newer: an API key for one
   shared account, an administrator's API key to create accounts, and for
   connected accounts a registration of this server (see Configuration)
+- A memory cache (`memcache.local`, for example APCu). The app keeps its limit
+  on the notices Synaplan sends in it; without one, ownCloud.online gives it a
+  cache that keeps nothing.
 
 ## Installation
 
@@ -92,6 +103,21 @@ Once this server is registered, Synaplan hears about it:
 Accounts this server created before it registered are moved onto the
 registration by an hourly background job, once per registration, so these
 rules reach them too. Background jobs run with cron (`occ system:cron`).
+
+### Copies from Synaplan
+
+The registration tells Synaplan where to send copies: this server's
+`/index.php/apps/oco_synaplan/api/v1/inbound`. When Synaplan reaches this
+server at another address, for example an internal one, enter it under
+**Address Synaplan uses to reach this ownCloud.online** and save. Synaplan
+must be able to reach it. Links to a copied file, in Synaplan and in the
+person's notice, use the address people open instead: `overwrite.cli.url` in
+`config.php`, which ownCloud.online sets when it is installed.
+
+Each notice from Synaplan is signed. The app checks it against Synaplan's
+published keys, which an hourly background job refreshes, and ignores a
+notice that is not for this server or was already seen. A person whose
+connection ended in Synaplan is asked to connect again on their next action.
 
 ## Development
 
@@ -196,6 +222,23 @@ the checkout's folder name, with the same container names. Stop it once with
 `docker compose -p <folder> -f docker-compose.dev.yml down` (add `-v` to
 delete its data) before `make dev-up`.
 
+Journeys that need `occ` run it in `OCO_CONTAINER` (default
+`synaplan-owncloud-dev`).
+
+### Test switches
+
+App values the journeys set and the UI never shows. Each is off unless it is
+`1`.
+
+| Switch | When on |
+| --- | --- |
+| `dev_hold_inbound` | A copy from Synaplan is written, but its result waits: Synaplan shows it as still copying until the switch is deleted and the next cron run reports it |
+
+```bash
+make dev-occ CMD="config:app:set oco_synaplan dev_hold_inbound --value 1"
+make dev-occ CMD="config:app:delete oco_synaplan dev_hold_inbound"
+```
+
 ### Local ownCloud.online stack
 
 There is no official image of BW-Tech's ownCloud.online. The dev stack runs a
@@ -210,6 +253,7 @@ container that runs `php occ system:cron` every 60 seconds.
 | `OCO_TAG` | `v11.0.10` | the tag the checkout must be at; CI also runs the newest `v11.0.*` (`v11.0.29`) |
 | `SYNAPLAN_URL_LOCAL` | `http://host.docker.internal:8000` | the Synaplan API as the container reaches it, written on first install |
 | `SYNAPLAN_PUBLIC_URL_LOCAL` | empty (the address above) | the Synaplan address people's browsers open, written on first install |
+| `SYNAPLAN_DELIVERY_URL` | `http://host.docker.internal:8083/index.php/apps/oco_synaplan/api/v1/inbound` | where Synaplan's containers send copies, written on first install |
 | `DEV_SYNAPLAN` | `dev` | `test` sets both addresses to the Synaplan test stack at `E2E_SYNAPLAN_URL` (see *Next to the Nextcloud app*) |
 
 ```bash
@@ -240,9 +284,17 @@ version of `OCO_TAG` and `oco_synaplan` is enabled; both are checked by
 
 The app repository is mounted over `apps/oco_synaplan` of the checkout, so a
 `make build` is live on the next page load. The stack has its own Docker
-network; a Synaplan that should deliver files to it needs a route to
-`http://localhost:8083` (for example `http://host.docker.internal:8083` from
-another container on the same Docker host).
+network. Synaplan's containers reach it on the Docker host, so the first
+install sets the address Synaplan uses to reach it to
+`SYNAPLAN_DELIVERY_URL`, and the journeys set it again; links to copies keep
+`http://localhost:8083` (`overwrite.cli.url`). Every start sets
+`memcache.local` to APCu.
+
+ownCloud.online adds an app's background jobs when it installs or upgrades
+the app, not on `app:enable`. A dev stack installed with an older version of
+the app gets new jobs with fresh volumes (`make dev-reset dev-up`) or with
+`make dev-occ CMD="config:app:set oco_synaplan installed_version --value 0"`
+followed by `make dev-occ CMD="upgrade"`.
 
 The frontend is built as self-contained IIFE bundles (Vue 3 bundled) because
 ownCloud.online loads app scripts as classic `<script>` tags. Entry points:

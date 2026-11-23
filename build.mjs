@@ -16,6 +16,7 @@ const entries = {
   research: 'src/research.ts',
   settings: 'src/settings.ts',
   'personal-settings': 'src/personal-settings.ts',
+  notices: 'src/notices.ts',
 }
 
 const watch = process.argv.includes('--watch')

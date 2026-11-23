@@ -40,6 +40,14 @@ final class Failure
     /** Provision mode has no administrator key that can create accounts. */
     public const ADMIN_KEY_MISSING = 'admin_key_missing';
     public const FILE_TOO_LARGE = 'file_too_large';
+    /** A file from Synaplan is larger than a copy may be (100 MB). */
+    public const COPY_TOO_LARGE = 'copy_too_large';
+    /** The person's storage here is full. */
+    public const QUOTA_EXCEEDED = 'quota_exceeded';
+    /** Twenty files with this name are already in the folder. */
+    public const NAME_TAKEN = 'name_taken';
+    /** The person cannot add files to the folder. */
+    public const FOLDER_READ_ONLY = 'folder_read_only';
     public const UNSUPPORTED_TYPE = 'unsupported_type';
     public const FILE_EMPTY = 'file_empty';
     public const NO_TEXT = 'no_text';

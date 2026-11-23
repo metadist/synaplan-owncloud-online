@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, type LinkStatus } from '../shared/api'
 import { startLink } from '../shared/link'
 import { injectModalStyles } from '../shared/mount'
-import { APP_NAME, translate as t } from '../shared/oc'
+import { APP_NAME, canPickFolder, pickFolder, translate as t } from '../shared/oc'
 
 type BannerType = 'success' | 'error' | 'warning'
 
@@ -12,6 +12,10 @@ const busy = ref(false)
 const status = ref<LinkStatus | null>(null)
 const banner = ref('')
 const bannerType = ref<BannerType>('success')
+
+const copyFolder = ref('')
+const savingFolder = ref(false)
+const folderPicker = canPickFolder()
 
 const isLinked = computed(() => status.value?.kind === 'linked')
 const canConnect = computed(() => status.value?.mode === 'link' && !isLinked.value && !!status.value?.link_available)
@@ -121,10 +125,34 @@ async function disconnect(): Promise<void> {
   }
 }
 
+async function loadFolder(): Promise<void> {
+  try {
+    copyFolder.value = (await api.getPreferences()).copy_folder || ''
+  } catch {
+    // The setting stays as it is; saving it shows a failure if the server is away.
+  }
+}
+
+async function saveFolder(folder: string): Promise<void> {
+  savingFolder.value = true
+  try {
+    copyFolder.value = (await api.savePreferences(folder)).copy_folder || ''
+    show(t('Saved'), 'success')
+  } catch {
+    show(t('Could not save that folder.'), 'error')
+  } finally {
+    savingFolder.value = false
+  }
+}
+
+function chooseFolder(): void {
+  pickFolder(t('Save files from Synaplan to'), (folder) => void saveFolder(folder))
+}
+
 onMounted(async () => {
   injectModalStyles()
   applyQueryBanner()
-  await loadStatus()
+  await Promise.all([loadStatus(), loadFolder()])
 })
 </script>
 
@@ -153,6 +181,22 @@ onMounted(async () => {
           <button class="oco-btn primary" @click="startLink">{{ t('Connect Synaplan') }}</button>
         </div>
       </template>
+
+      <h3>{{ t('Save files from Synaplan to') }}</h3>
+      <p class="settings-hint">
+        {{ t('Copies land in a folder for each kind, such as Documents or Images, inside this folder.') }}
+      </p>
+      <div class="synaplan-personal-row">
+        <p data-testid="synaplan-copy-folder">
+          <strong>{{ copyFolder ? copyFolder.replace(/^\/+/, '') : t('Synaplan (the default)') }}</strong>
+        </p>
+        <button v-if="folderPicker" class="oco-btn" :disabled="savingFolder" @click="chooseFolder">
+          {{ t('Choose folder…') }}
+        </button>
+        <button v-if="copyFolder" class="oco-btn" :disabled="savingFolder" @click="saveFolder('')">
+          {{ t('Use the default') }}
+        </button>
+      </div>
     </template>
   </div>
 </template>

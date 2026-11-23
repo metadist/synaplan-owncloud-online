@@ -56,7 +56,8 @@ final class OpenApiContract
     public function violations(string $method, string $path, array $body, bool $multipart, bool $form = false): array
     {
         $template = $this->specPath($method, $path);
-        if ($template === null) {
+        if ($template === null || !$this->routeExists($method, $path)) {
+            // The spec names a parameter without its pattern; the route keeps it.
             return $this->routeExists($method, $path) ? [] : ["$method $path: no such route"];
         }
 
@@ -88,6 +89,37 @@ final class OpenApiContract
 
         $violations = [];
         $this->checkObject($method, $template, '', $schema, $body, $violations);
+
+        return $violations;
+    }
+
+    /**
+     * Query parameters the operation does not declare: Synaplan ignores
+     * them, so a filter sent under the wrong name would quietly not filter.
+     *
+     * @param list<string> $names
+     * @return list<string>
+     */
+    public function queryViolations(string $method, string $path, array $names): array
+    {
+        $template = $this->specPath($method, $path);
+        $operation = $template === null ? null : ($this->spec['paths'][$template][strtolower($method)] ?? null);
+        if (!is_array($operation) || $names === []) {
+            return [];
+        }
+        $declared = [];
+        foreach ([...($this->spec['paths'][$template]['parameters'] ?? []), ...($operation['parameters'] ?? [])] as $parameter) {
+            $parameter = $this->resolve($parameter);
+            if (($parameter['in'] ?? '') === 'query' && is_string($parameter['name'] ?? null)) {
+                $declared[] = $parameter['name'];
+            }
+        }
+        $violations = [];
+        foreach ($names as $name) {
+            if (!in_array($name, $declared, true)) {
+                $violations[] = "$method $template: sends query '$name', which the spec does not declare";
+            }
+        }
 
         return $violations;
     }

@@ -26,7 +26,8 @@
         },
         "classmap": [
             "tests/stubs/OC.php",
-            "tests/stubs/OC_Template.php"
+            "tests/stubs/OC_Template.php",
+            "tests/stubs/OC_Util.php"
         ]
     },
     "config": {

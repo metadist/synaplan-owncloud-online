@@ -14,6 +14,7 @@ namespace OCA\OcoSynaplan\Controller;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\PlatformLinkException;
 use OCA\OcoSynaplan\Service\KeyStorage;
+use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
@@ -41,6 +42,7 @@ class SettingsController extends Controller
         private SynaplanConfig $synaplanConfig,
         private KeyStorage $keys,
         private PlatformLinkService $platformLinks,
+        private NotifyKeyCache $notifyKeys,
         private ILogger $logger,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -73,6 +75,8 @@ class SettingsController extends Controller
             'link_registered' => $this->synaplanConfig->isRegistered(),
             'link_instance_id' => $this->synaplanConfig->getLinkInstanceId(),
             'link_instance' => $this->registrationStatus(),
+            'delivery_url' => (string) $this->config->getAppValue(Application::APP_ID, 'delivery_url', ''),
+            'delivery_url_default' => $this->platformLinks->defaultDeliveryUrl(),
         ]);
     }
 
@@ -96,6 +100,7 @@ class SettingsController extends Controller
         ?bool $link_auto_provision = null,
         ?string $synaplan_public_url = null,
         ?string $synaplan_public_url_local = null,
+        ?string $delivery_url = null,
     ): JSONResponse {
         // Always re-read the raw body so the boolean flags also surface for PUT.
         $body = file_get_contents('php://input');
@@ -140,6 +145,9 @@ class SettingsController extends Controller
                 }
                 if ($synaplan_public_url_local === null && array_key_exists('synaplan_public_url_local', $decoded)) {
                     $synaplan_public_url_local = trim((string) $decoded['synaplan_public_url_local']);
+                }
+                if ($delivery_url === null && array_key_exists('delivery_url', $decoded)) {
+                    $delivery_url = trim((string) $decoded['delivery_url']);
                 }
             }
         }
@@ -208,14 +216,29 @@ class SettingsController extends Controller
             $this->config->setAppValue(Application::APP_ID, 'link_auto_provision', $link_auto_provision ? '1' : '0');
         }
 
+        // An empty address means this server's own inbound route.
+        $deliveryError = '';
+        if ($delivery_url !== null) {
+            if ($delivery_url === '' || self::isHttpUrl($delivery_url)) {
+                $this->config->setAppValue(Application::APP_ID, 'delivery_url', $delivery_url);
+            } else {
+                $deliveryError = 'invalid';
+            }
+        }
+
         // A registered server tells Synaplan what it can do now. A failure
         // here does not undo the save.
         $announceError = false;
         if ($this->synaplanConfig->isRegistered()) {
             try {
                 $this->platformLinks->announce();
+                $this->notifyKeys->refresh();
             } catch (\Throwable $e) {
-                $announceError = true;
+                if ($e instanceof PlatformLinkException && $e->getErrorCode() === PlatformLinkException::CODE_DELIVERY_REFUSED) {
+                    $deliveryError = $deliveryError !== '' ? $deliveryError : 'refused';
+                } else {
+                    $announceError = true;
+                }
                 $this->logger->warning('Could not update the Synaplan registration: {message}', [
                     'app' => Application::APP_ID,
                     'message' => $e->getMessage(),
@@ -226,7 +249,17 @@ class SettingsController extends Controller
         return new JSONResponse([
             'success' => true,
             'announce_error' => $announceError,
+            'delivery_error' => $deliveryError,
         ]);
+    }
+
+    private static function isHttpUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+
+        return is_array($parts)
+            && in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
+            && (string) ($parts['host'] ?? '') !== '';
     }
 
     /**
@@ -235,7 +268,10 @@ class SettingsController extends Controller
     public function registerInstance(): JSONResponse
     {
         try {
+            $this->notifyKeys->refreshTrust();
             $result = $this->platformLinks->register(trim((string) $this->request->getParam('registration_token', '')));
+            // Synaplan can send its first notification right after registering.
+            $this->notifyKeys->refresh();
 
             return new JSONResponse(['success' => true] + $result);
         } catch (PlatformLinkException $e) {

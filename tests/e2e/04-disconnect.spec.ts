@@ -14,9 +14,8 @@ import {
   synaplanAs,
 } from './support'
 
-// Synaplan does not tell this ownCloud.online yet (the inbound route comes
-// with copies from Synaplan), so the app learns at its next call: that
-// action says the connection ended, and the one after asks to connect.
+// Synaplan tells this ownCloud.online right away (identity_revoked), so the
+// next action asks to connect again instead of failing, and connecting works.
 test('after a disconnect in Synaplan, the next action asks to connect again', async ({ page }) => {
   await logIn(page, 'ada')
   await ensureConnected(page)
@@ -29,11 +28,7 @@ test('after a disconnect in Synaplan, the next action asks to connect again', as
     expect(removed.ok(), `disconnecting link ${link.id}`).toBe(true)
   }
 
-  let dialog = await openFileAction(page, 'Summarize with Synaplan')
-  await dialog.getByRole('button', { name: 'Summarize', exact: true }).click()
-  await expect(dialog.locator('.oco-failure')).toContainText('Your Synaplan connection ended. Connect again.')
-
-  dialog = await openFileAction(page, 'Summarize with Synaplan')
+  const dialog = await openFileAction(page, 'Summarize with Synaplan')
   await expect(dialog.getByRole('button', { name: 'Summarize', exact: true })).toHaveCount(0)
   await consentCard(page).getByRole('button', { name: 'Connect my Synaplan account' }).click()
   await allowOnSynaplan(page)

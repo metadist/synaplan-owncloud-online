@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\SettingsController;
+use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
@@ -68,9 +69,75 @@ final class SettingsControllerTest extends TestCase
 
         $data = $this->controller()->saveSettings(mode: 'link')->getData();
 
-        self::assertSame(['success' => true, 'announce_error' => true], $data);
+        self::assertSame(['success' => true, 'announce_error' => true, 'delivery_error' => ''], $data);
         self::assertSame('link', $this->config->appValue('mode'));
         self::assertSame('PUT', $this->http->to('/oauth/register/client-1')[0]['method']);
+    }
+
+    public function testTheDeliveryAddressIsSavedAndToldToSynaplan(): void
+    {
+        $this->register();
+        $this->http->answer(static fn (): array => []);
+
+        $data = $this->controller()->saveSettings(delivery_url: 'https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound')->getData();
+
+        self::assertSame(['success' => true, 'announce_error' => false, 'delivery_error' => ''], $data);
+        $put = $this->http->to('/oauth/register/client-1');
+        self::assertCount(1, $put);
+        self::assertSame('https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound', $put[0]['body']['delivery_url']);
+        self::assertSame(['deliveries'], $put[0]['body']['app_capabilities']);
+        self::assertSame(
+            'https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound',
+            $this->controller()->getSettings()->getData()['delivery_url'],
+        );
+    }
+
+    public function testAnAddressThatIsNotAWebAddressIsNotSaved(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'delivery_url', 'https://cloud.example.org/inbound');
+
+        $data = $this->controller()->saveSettings(delivery_url: 'cloud.example.org/inbound')->getData();
+
+        self::assertSame('invalid', $data['delivery_error']);
+        self::assertSame('https://cloud.example.org/inbound', $this->config->appValue('delivery_url'));
+    }
+
+    public function testAnAddressSynaplanRefusesStillLetsTheRestThrough(): void
+    {
+        $this->register();
+        $this->http->answer(static fn (string $method, string $path, array $options): IResponse|array => str_contains((string) ($options['body'] ?? ''), 'delivery_url')
+            ? RecordingHttp::response(400, '{"error":"invalid_client_metadata","error_description":"That address is not on this cloud."}')
+            : []);
+
+        $data = $this->controller()->saveSettings(delivery_url: 'http://elsewhere.example.org/inbound')->getData();
+
+        self::assertSame(['success' => true, 'announce_error' => false, 'delivery_error' => 'refused'], $data);
+        $put = $this->http->to('/oauth/register/client-1');
+        self::assertCount(2, $put);
+        self::assertArrayNotHasKey('delivery_url', $put[1]['body']);
+        self::assertSame(['deliveries'], $put[1]['body']['app_capabilities']);
+    }
+
+    public function testRegisteringReadsTheNotificationKeys(): void
+    {
+        $this->http->answer(static fn (string $method, string $path): array => match ($path) {
+            '/.well-known/synaplan-configuration' => ['issuer' => self::SYNAPLAN],
+            '/.well-known/jwks.json' => ['keys' => [['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => 'AAAA', 'kid' => 'n-1']]],
+            default => ['client_id' => 'client-1', 'status' => 'active'],
+        });
+
+        $this->controller(['registration_token' => 'token-1'])->registerInstance();
+
+        self::assertSame(self::SYNAPLAN, $this->config->appValue('notify_issuer'));
+        self::assertSame([['publicKey' => 'ed25519:AAAA', 'kid' => 'n-1']], json_decode((string) $this->config->appValue('notify_keys'), true));
+    }
+
+    public function testWithoutAnAddressTheDefaultIsThisServersOwnRoute(): void
+    {
+        $settings = $this->controller()->getSettings()->getData();
+
+        self::assertSame('', $settings['delivery_url']);
+        self::assertSame('http://localhost:8083/index.php/route/oco_synaplan.inbound.receive', $settings['delivery_url_default']);
     }
 
     public function testRegisteringPassesTheTokenTheAdministratorPasted(): void
@@ -114,6 +181,6 @@ final class SettingsControllerTest extends TestCase
         $request = $this->createStub(IRequest::class);
         $request->method('getParam')->willReturnCallback(static fn (string $key, mixed $default = null): mixed => $params[$key] ?? $default);
 
-        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), $this->logger());
+        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), new NotifyKeyCache($this->config, $this->links()), $this->logger());
     }
 }

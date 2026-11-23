@@ -84,9 +84,15 @@ if ! installed; then
 	if [ -n "${SYNAPLAN_PUBLIC_URL_LOCAL:-}" ]; then
 		occ config:app:set "$APP" synaplan_public_url_local --value "$SYNAPLAN_PUBLIC_URL_LOCAL"
 	fi
+	# Synaplan's containers reach this server on the Docker host, not at localhost.
+	occ config:app:set "$APP" delivery_url \
+		--value "${SYNAPLAN_DELIVERY_URL:-http://host.docker.internal:8083/index.php/apps/oco_synaplan/api/v1/inbound}"
 fi
 
 occ app:enable "$APP"
+# The app keeps its inbound rate limit and the files it wrote in the memory
+# cache; without one configured, ownCloud.online gives it a cache that keeps nothing.
+occ config:system:set memcache.local --value '\OC\Memcache\APCu'
 
 echo "ownCloud.online $version is installed; starting Apache"
 exec apache2-foreground

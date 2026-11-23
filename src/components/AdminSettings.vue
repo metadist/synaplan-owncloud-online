@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, type AiUser, type Mode, type RegistrationStatus, type Settings } from '../shared/api'
+import { api, type AiUser, type Mode, type RegistrationStatus, type Settings, type SettingsSaved } from '../shared/api'
 import { failureFromError } from '../shared/failures'
 import { LANGUAGES } from '../shared/languages'
 import { APP_NAME, notify, translate as t } from '../shared/oc'
@@ -33,6 +33,8 @@ const linkInstanceId = ref('')
 const linkInstance = ref<RegistrationStatus | null>(null)
 const registrationToken = ref('')
 const registering = ref(false)
+const deliveryUrl = ref('')
+const deliveryUrlDefault = ref('')
 
 const aiUsers = ref<AiUser[]>([])
 const aiUsersLoading = ref(false)
@@ -80,6 +82,8 @@ function apply(s: Settings): void {
   linkRegistered.value = s.link_registered
   linkInstanceId.value = s.link_instance_id || ''
   linkInstance.value = s.link_instance
+  deliveryUrl.value = s.delivery_url || ''
+  deliveryUrlDefault.value = s.delivery_url_default || ''
 }
 
 onMounted(async () => {
@@ -94,6 +98,23 @@ onMounted(async () => {
     void loadAiUsers()
   }
 })
+
+function savedMessage(result: SettingsSaved): string {
+  if (result.delivery_error === 'invalid') {
+    return t('Saved, except the address Synaplan uses to reach this {app}: it must start with https:// or http://.', {
+      app: APP_NAME,
+    })
+  }
+  if (result.delivery_error === 'refused') {
+    return t(
+      'Saved, but Synaplan does not accept that address for this {app}. Use an address on the host this {app} registered with, or ask the Synaplan administrator to approve it.',
+      { app: APP_NAME },
+    )
+  }
+  return result.announce_error
+    ? t('Settings saved. Synaplan could not be told about the change yet; save again later.')
+    : t('Settings saved')
+}
 
 async function save(): Promise<void> {
   saving.value = true
@@ -111,6 +132,9 @@ async function save(): Promise<void> {
       per_user_accounts: mode.value !== 'shared',
       link_auto_provision: linkAutoProvision.value,
     }
+    if (mode.value === 'link' || mode.value === 'provision') {
+      body.delivery_url = deliveryUrl.value.trim()
+    }
     // A blank key field keeps the stored key.
     if (apiKey.value.trim() !== '') {
       body.api_key = apiKey.value.trim()
@@ -122,11 +146,7 @@ async function save(): Promise<void> {
     apply(await api.getSettings())
     apiKey.value = ''
     apiKeyLocal.value = ''
-    notify(
-      result.announce_error
-        ? t('Settings saved. Synaplan could not be told about the change yet; save again later.')
-        : t('Settings saved'),
-    )
+    notify(savedMessage(result))
     if (mode.value !== 'shared') {
       void loadAiUsers()
     }
@@ -375,7 +395,10 @@ function formatConsentDate(iso: string | null | undefined): string {
       :link-instance-id="linkInstanceId"
       :link-instance="linkInstance"
       :registering="registering"
+      :delivery-url="deliveryUrl"
+      :delivery-url-default="deliveryUrlDefault"
       @update:registration-token="registrationToken = $event"
+      @update:delivery-url="deliveryUrl = $event"
       @register="registerInstance"
       @forget="forgetInstance"
     />

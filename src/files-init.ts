@@ -7,10 +7,14 @@
  * the consent card when the person has not agreed yet. Translate is added
  * once the server said the connected Synaplan translates; the Files list
  * shows an action registered later as well.
+ *
+ * New → From Synaplan… is a plugin of the Files app's New menu: it copies the
+ * person's Synaplan files into the folder that is open.
  */
 import type { Component } from 'vue'
 import ChatPanel from './components/ChatPanel.vue'
 import ConsentCard from './components/ConsentCard.vue'
+import FromSynaplanModal from './components/FromSynaplanModal.vue'
 import KnowledgeModal from './components/KnowledgeModal.vue'
 import SummaryModal from './components/SummaryModal.vue'
 import TranslateModal from './components/TranslateModal.vue'
@@ -126,6 +130,60 @@ function register(): void {
     () => undefined,
   )
 }
+
+export const FROM_SYNAPLAN_ENTRY = 'synaplan-from-synaplan'
+
+function injectMenuIcon(): void {
+  if (document.getElementById('oco-synaplan-menu-icon')) {
+    return
+  }
+  const style = document.createElement('style')
+  style.id = 'oco-synaplan-menu-icon'
+  style.textContent = `.newFileMenu .icon-oco-synaplan { background-image: url("${OC.imagePath(APP_ID, 'app.svg')}"); background-size: 16px; }`
+  document.head.appendChild(style)
+}
+
+/**
+ * The New menu renders its entries and asks for a file name on a click. The
+ * plugin attaches after the menu bound its click handler, so the handler is
+ * wrapped and bound again.
+ */
+function registerFromSynaplan(): void {
+  if (!OC.Plugins || typeof OC.Plugins.register !== 'function') {
+    return
+  }
+  OC.Plugins.register('OCA.Files.NewFileMenu', {
+    attach(menu) {
+      injectMenuIcon()
+      menu.addMenuEntry({
+        id: FROM_SYNAPLAN_ENTRY,
+        displayName: t('From Synaplan…'),
+        templateName: '',
+        iconClass: 'icon-oco-synaplan',
+        fileType: FROM_SYNAPLAN_ENTRY,
+        actionHandler: () => undefined,
+      })
+      const askForName = menu._onClickAction
+      menu._onClickAction = function (this: typeof menu, event: Event) {
+        const item = event.target instanceof Element ? event.target.closest('.menuitem') : null
+        if (item?.getAttribute('data-action') !== FROM_SYNAPLAN_ENTRY) {
+          askForName.call(this, event)
+          return
+        }
+        event.preventDefault()
+        OC.hideMenus?.()
+        const fileList = this.fileList
+        void openGuarded(FromSynaplanModal, {
+          folder: fileList?.getCurrentDirectory?.() || '/',
+          onAdded: () => fileList?.reload?.(),
+        })
+      }
+      menu.delegateEvents()
+    },
+  })
+}
+
+registerFromSynaplan()
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', register)
