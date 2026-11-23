@@ -8,6 +8,7 @@ use Doctrine\DBAL\Cache\ArrayResult;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Result;
 use OCA\OcoSynaplan\Service\KeyStorage;
+use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\OAuthClient;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SynaplanClient;
@@ -34,6 +35,8 @@ trait BuildsServices
     protected RecordingHttp $http;
     protected MemoryCache $cache;
     protected ?IUser $signedIn = null;
+    /** Grants every lock at once when a test sets none. */
+    protected ?ILockingProvider $locking = null;
 
     /** @var array<string, object> */
     private array $built = [];
@@ -51,6 +54,7 @@ trait BuildsServices
         $this->http = new RecordingHttp($responder);
         $this->cache = new MemoryCache();
         $this->signedIn = null;
+        $this->locking = null;
         $this->built = [];
     }
 
@@ -98,11 +102,21 @@ trait BuildsServices
             $this->http,
             $this->config,
             $this->db(),
-            $this->createStub(ILockingProvider::class),
+            $this->locks(),
             $this->keys(),
             $this->synaplanConfig(),
             $this->logger(),
         );
+    }
+
+    protected function notifyKeys(): NotifyKeyCache
+    {
+        return $this->built['notifyKeys'] ??= new NotifyKeyCache($this->config, $this->db(), $this->locks(), $this->links());
+    }
+
+    protected function locks(): ILockingProvider
+    {
+        return $this->locking ??= $this->createStub(ILockingProvider::class);
     }
 
     protected function accounts(): UserAccountService
@@ -203,19 +217,20 @@ trait BuildsServices
     }
 
     /**
-     * The database as the app reads it: the preferences table, from the
-     * settings in memory.
+     * The database as the app reads it: the preferences and appconfig
+     * tables, from the settings in memory.
      */
     protected function db(): IDBConnection
     {
         $db = $this->createStub(IDBConnection::class);
-        $db->method('getQueryBuilder')->willReturnCallback(fn (): IQueryBuilder => $this->preferencesQuery());
+        $db->method('getQueryBuilder')->willReturnCallback(fn (): IQueryBuilder => $this->settingsQuery());
 
         return $db;
     }
 
-    private function preferencesQuery(): IQueryBuilder
+    private function settingsQuery(): IQueryBuilder
     {
+        $table = '';
         $columns = [];
         $parameters = [];
         $query = $this->createStub(IQueryBuilder::class);
@@ -224,7 +239,12 @@ trait BuildsServices
 
             return $query;
         });
-        foreach (['from', 'where', 'andWhere'] as $method) {
+        $query->method('from')->willReturnCallback(function (string $from) use (&$table, $query): IQueryBuilder {
+            $table = $from;
+
+            return $query;
+        });
+        foreach (['where', 'andWhere'] as $method) {
             $query->method($method)->willReturnSelf();
         }
         $query->method('expr')->willReturn($this->createStub(IExpressionBuilder::class));
@@ -233,8 +253,12 @@ trait BuildsServices
 
             return ':param' . count($parameters);
         });
-        $query->method('execute')->willReturnCallback(function () use (&$columns, &$parameters): Result {
-            if (in_array('userid', $columns, true)) {
+        $query->method('execute')->willReturnCallback(function () use (&$table, &$columns, &$parameters): Result {
+            if ($table === 'appconfig') {
+                [$app, $key] = $parameters + ['', ''];
+                $value = $this->config->app[$app][$key] ?? null;
+                $rows = $value === null ? [] : [['configvalue' => $value]];
+            } elseif (in_array('userid', $columns, true)) {
                 [$app, $key] = $parameters + ['', ''];
                 $rows = [];
                 foreach ($this->config->user as $uid => $apps) {

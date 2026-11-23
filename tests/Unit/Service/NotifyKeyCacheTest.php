@@ -6,12 +6,13 @@ namespace OCA\OcoSynaplan\Tests\Unit\Service;
 
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
-use OCA\OcoSynaplan\Tests\Unit\Support\MemoryConfig;
+use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
+use OCP\Lock\ILockingProvider;
 use PHPUnit\Framework\TestCase;
 
 final class NotifyKeyCacheTest extends TestCase
 {
-    private MemoryConfig $config;
+    use BuildsServices;
 
     /** @var array{issuer: string, keys: list<array{publicKey: string, kid: string}>}|\Throwable */
     private array|\Throwable $trust;
@@ -20,7 +21,7 @@ final class NotifyKeyCacheTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->config = new MemoryConfig(['link_instance_id' => 'pi_oc']);
+        $this->setUpServices(['link_instance_id' => 'pi_oc']);
     }
 
     public function testARefreshKeepsTheIssuerAndKeys(): void
@@ -83,18 +84,42 @@ final class NotifyKeyCacheTest extends TestCase
         self::assertFalse($this->cache()->refreshForUnknownKey(1000));
     }
 
-    private function cache(): NotifyKeyCache
+    public function testARefreshAnotherRequestJustMadeIsUsedInsteadOfRepeated(): void
     {
-        $links = $this->createStub(PlatformLinkService::class);
-        $links->method('notificationTrust')->willReturnCallback(function (): array {
-            $this->asked++;
-            if ($this->trust instanceof \Throwable) {
-                throw $this->trust;
-            }
-
-            return $this->trust;
+        $this->config->setAppValue('oco_synaplan', 'notify_issuer', 'https://synaplan.example');
+        $this->config->setAppValue('oco_synaplan', 'notify_keys', '[{"publicKey":"ed25519:old","kid":"k1"}]');
+        $this->config->keepWhatThisRequestRead();
+        $links = $this->createMock(PlatformLinkService::class);
+        $links->expects($this->never())->method('notificationTrust');
+        $locks = $this->createMock(ILockingProvider::class);
+        // While this request waits for the lock, the one holding it refreshes.
+        $locks->expects($this->once())->method('acquireLock')->willReturnCallback(function (): void {
+            $this->config->app['oco_synaplan']['notify_keys_unknown_checked_at'] = '1000';
+            $this->config->app['oco_synaplan']['notify_keys'] = '[{"publicKey":"ed25519:new","kid":"k2"}]';
         });
+        $locks->expects($this->once())->method('releaseLock')
+            ->with('oco_synaplan/notify-keys-unknown', ILockingProvider::LOCK_EXCLUSIVE);
+        $this->locking = $locks;
+        $cache = $this->cache($links);
 
-        return new NotifyKeyCache($this->config, $links);
+        self::assertTrue($cache->refreshForUnknownKey(1010));
+        self::assertSame([['publicKey' => 'ed25519:new', 'kid' => 'k2']], $cache->keys());
+    }
+
+    private function cache(?PlatformLinkService $links = null): NotifyKeyCache
+    {
+        if ($links === null) {
+            $links = $this->createStub(PlatformLinkService::class);
+            $links->method('notificationTrust')->willReturnCallback(function (): array {
+                $this->asked++;
+                if ($this->trust instanceof \Throwable) {
+                    throw $this->trust;
+                }
+
+                return $this->trust;
+            });
+        }
+
+        return new NotifyKeyCache($this->config, $this->db(), $this->locks(), $links);
     }
 }

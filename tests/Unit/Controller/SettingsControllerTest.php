@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\SettingsController;
-use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
@@ -181,6 +180,6 @@ final class SettingsControllerTest extends TestCase
         $request = $this->createStub(IRequest::class);
         $request->method('getParam')->willReturnCallback(static fn (string $key, mixed $default = null): mixed => $params[$key] ?? $default);
 
-        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), new NotifyKeyCache($this->config, $this->links()), $this->logger());
+        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), $this->notifyKeys(), $this->logger());
     }
 }

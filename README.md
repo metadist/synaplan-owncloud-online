@@ -205,7 +205,12 @@ single-use, so on a kept stack the journeys register this server again
 without it. Synaplan allows a registered client 30 updates an hour, and each
 saved admin setting is one, so the global setup clears those counters in the
 test stack's Redis (`synaplan-redis-test`; `SYNAPLAN_REDIS_CONTAINER` names
-another) before each run.
+another) before each run. The provisioning journeys delete only Synaplan
+accounts this ownCloud.online created, whose every identity belongs to an
+ownCloud.online instance on this host. They read that in the test stack's
+database through `synaplan-app-test` (`SYNAPLAN_APP_CONTAINER` names another)
+and delete nothing when that container and `E2E_SYNAPLAN_URL` are different
+stacks.
 
 `make e2e-up` installs the dev stack with `DEV_SYNAPLAN=test`, which points
 the app at the test stack. After `make test-e2e` the app stays registered

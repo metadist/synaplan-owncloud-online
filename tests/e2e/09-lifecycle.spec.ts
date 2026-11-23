@@ -9,7 +9,7 @@ import {
   ensureConnected,
   linksOf,
   logIn,
-  provisionedAccountIds,
+  ownedAccountIds,
   saveSettings,
   setUserEnabled,
   SYNAPLAN_PERSON,
@@ -76,14 +76,14 @@ test('when the administrator deletes a person, the Synaplan account created for 
     await uploadReview(person.uid)
     await logIn(page, person.uid)
     await activateAndSummarize(page)
-    expect(await provisionedAccountIds(person.email)).toHaveLength(1)
+    expect(ownedAccountIds(person.uid)).toHaveLength(1)
 
     await deleteUser(person.uid)
 
-    expect(await provisionedAccountIds(person.email)).toEqual([])
+    expect(ownedAccountIds(person.uid)).toEqual([])
   } finally {
     await deleteUser(person.uid)
-    await deleteSynaplanAccount(person.email)
+    await deleteSynaplanAccount(person.uid)
     await saveSettings({ mode: 'link' })
   }
 })

@@ -410,6 +410,18 @@ final class UserAccountServiceTest extends TestCase
         self::assertNull($this->accounts()->renewProvisionedKey(), 'a key holding every scope stays');
     }
 
+    public function testTheOldKeyIsKeptWhenNoReplacementCouldBeMinted(): void
+    {
+        unset($this->config->app['oco_synaplan']['api_key']);
+        $this->keys()->setUserKey('ada', 'sk_old');
+        $this->config->setUserValue('ada', 'oco_synaplan', UserAccountService::USER_KEY_ID_PREF, '11');
+
+        self::assertNull($this->accounts()->renewProvisionedKey());
+
+        self::assertSame([], $this->http->calls, 'the old key is not revoked');
+        self::assertSame('sk_old', $this->keys()->getUserKey('ada'));
+    }
+
     /**
      * @return array<string, array{0: string, 1: list<string>}>
      */

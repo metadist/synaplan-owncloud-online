@@ -115,32 +115,123 @@ export async function resetPerson(uid: string): Promise<void> {
   await admin.dispose()
 }
 
+/** The Synaplan app container of the test stack, whose database the account cleanup reads. */
+const SYNAPLAN_CONTAINER = process.env.SYNAPLAN_APP_CONTAINER ?? 'synaplan-app-test'
+
+const OCO_HOST = new URL(OCO_URL).host
+if (!/^[a-z0-9.-]+(:\d+)?$/i.test(OCO_HOST)) {
+  throw new Error(`unexpected ownCloud.online host ${OCO_HOST}`)
+}
+
+/** SQL condition on BPLATFORMINSTANCES p: an ownCloud.online instance on this host. */
+const OURS = `p.BCLIENT = 'owncloud' AND p.BHOST = '${OCO_HOST}'`
+
 /**
- * The ids of the Synaplan accounts provisioning created for an email address.
- * Accounts people made themselves are left out.
+ * SQL subquery for the ids of the Synaplan identities a person has at an
+ * ownCloud.online instance on this host, so a query on the shared test stack
+ * leaves rows of Nextcloud alone.
+ *
+ * @param uid ownCloud.online user id
  */
-export async function provisionedAccountIds(email: string): Promise<number[]> {
-  const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
-  const found = await synaplan.get(`/api/v1/admin/users?search=${encodeURIComponent(email)}`)
-  expect(found.ok(), `looking up ${email} in Synaplan`).toBe(true)
-  const { users = [] } = (await found.json()) as { users?: { id: number; email: string; providerId: string }[] }
-  await synaplan.dispose()
-  return users.filter((user) => user.email === email && user.providerId === 'external').map((user) => user.id)
+function ownIdentities(uid: string): string {
+  if (!/^[a-z0-9._-]+$/i.test(uid)) {
+    throw new Error(`unexpected uid ${uid}`)
+  }
+  return `SELECT i.BID FROM BEXTERNALIDENTITIES i
+    JOIN BPLATFORMINSTANCES p ON p.BINSTANCEID = i.BINSTANCEID
+    WHERE ${OURS} AND i.BEXTERNALID = '${uid}'`
 }
 
 /**
- * Delete the Synaplan account provisioning created for a person, so a
- * provisioning journey starts without one, even after a release that
- * revoked the account on Deactivate.
+ * The Synaplan accounts this ownCloud.online provisioned for a person, each
+ * with its email in the database: each has an identity for the uid at an
+ * ownCloud.online instance on this host (a kept Synaplan also holds the
+ * instances of earlier runs), and none elsewhere. Nextcloud shares the test
+ * stack and seeds people of the same names, so an email or "provisioned"
+ * alone may name its accounts. Synaplan's admin API does not show
+ * identities, so this asks its database.
+ *
+ * @param uid ownCloud.online user id
  */
-export async function deleteSynaplanAccount(email: string): Promise<void> {
-  const ids = await provisionedAccountIds(email)
-  const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
-  for (const id of ids) {
-    const deleted = await synaplan.delete(`/api/v1/admin/users/${id}`)
-    expect(deleted.ok(), `deleting ${email} from Synaplan`).toBe(true)
+function ownedAccounts(uid: string): Map<number, string> {
+  const sql = `SELECT CONCAT('owned:', COALESCE(GROUP_CONCAT(DISTINCT CONCAT(u.BID, '=', u.BMAIL) SEPARATOR ';'), '')) AS owned
+    FROM BEXTERNALIDENTITIES i JOIN BUSER u ON u.BID = i.BUSERID
+    WHERE i.BID IN (${ownIdentities(uid)})
+    AND i.BUSERID NOT IN (SELECT o.BUSERID FROM BEXTERNALIDENTITIES o
+      LEFT JOIN BPLATFORMINSTANCES p ON p.BINSTANCEID = o.BINSTANCEID
+      WHERE p.BID IS NULL OR NOT (${OURS}))`
+  const run = spawnSync(
+    'docker',
+    ['exec', SYNAPLAN_CONTAINER, 'php', 'bin/console', 'dbal:run-sql', sql.replace(/\s+/g, ' ')],
+    { encoding: 'utf8' },
+  )
+  const match = /owned:(\S*)/.exec(run.stdout ?? '')
+  if (run.status !== 0 || match === null) {
+    throw new Error(
+      `Could not read the Synaplan accounts of ${uid} in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
+    )
   }
-  await synaplan.dispose()
+  const accounts = new Map<number, string>()
+  for (const pair of match[1].split(';').filter((entry) => entry !== '')) {
+    const at = pair.indexOf('=')
+    accounts.set(Number(pair.slice(0, at)), pair.slice(at + 1))
+  }
+  return accounts
+}
+
+/**
+ * The ids of the Synaplan accounts this ownCloud.online provisioned for a
+ * person.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function ownedAccountIds(uid: string): number[] {
+  return [...ownedAccounts(uid).keys()]
+}
+
+/** The email of a Synaplan account, as its admin API shows it; empty when there is none. */
+export async function accountEmail(id: number, synaplan?: APIRequestContext): Promise<string> {
+  const admin = synaplan ?? (await synaplanAs(SYNAPLAN_ADMIN))
+  try {
+    const found = await admin.get(`/api/v1/admin/users/${id}/usage`)
+    return found.ok() ? (((await found.json()) as { user?: { email?: string } }).user?.email ?? '') : ''
+  } finally {
+    if (synaplan === undefined) {
+      await admin.dispose()
+    }
+  }
+}
+
+/**
+ * Delete the Synaplan accounts this ownCloud.online provisioned for a
+ * person, so a provisioning journey starts without one, even after a release
+ * that revoked the account on Deactivate. Accounts of other clouds sharing
+ * the test stack are never touched.
+ *
+ * @param uid ownCloud.online user id
+ */
+export async function deleteSynaplanAccount(uid: string): Promise<void> {
+  const accounts = ownedAccounts(uid)
+  const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
+  try {
+    for (const [id, email] of accounts) {
+      // The database is read in SYNAPLAN_APP_CONTAINER, the deletion goes to
+      // E2E_SYNAPLAN_URL: an account that differs between them means two
+      // stacks, where the id may name someone else's account.
+      const seen = await accountEmail(id, synaplan)
+      if (seen !== email) {
+        throw new Error(
+          `Synaplan account ${id} is ${email} in ${SYNAPLAN_CONTAINER} but ${seen || 'missing'} at ${SYNAPLAN_URL}: they are different stacks, so nothing was deleted. Point SYNAPLAN_APP_CONTAINER and E2E_SYNAPLAN_URL at one.`,
+        )
+      }
+    }
+    for (const id of accounts.keys()) {
+      const deleted = await synaplan.delete(`/api/v1/admin/users/${id}`)
+      expect(deleted.ok(), `deleting ${uid}'s account ${id} from Synaplan`).toBe(true)
+    }
+  } finally {
+    await synaplan.dispose()
+  }
 }
 
 /**
@@ -230,9 +321,15 @@ export async function openFileAction(page: Page, action: string, file = FILE): P
   await page.goto('/index.php/apps/files/')
   await features
   const row = page.locator(`#fileList tr[data-file="${file}"]`)
-  await row.hover()
-  await row.locator('.action-menu').click({ force: true })
-  await page.locator('.fileActionsMenu a.action', { hasText: action }).click()
+  const item = page.locator('.fileActionsMenu a.action', { hasText: action })
+  // Files redraws a row's actions when an app adds one, which can take the
+  // menu away while it opens.
+  await expect(async () => {
+    await row.hover()
+    await row.locator('.action-menu').click({ force: true, timeout: 2_000 })
+    await expect(item).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
+  await item.click()
   const dialog = dialogOf(page)
   await expect(dialog).toBeVisible()
   return dialog

@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
 import {
+  accountEmail,
   activateAndSummarize,
   deleteSynaplanAccount,
   EMAIL,
   logIn,
-  provisionedAccountIds,
+  ownedAccountIds,
   resetPerson,
   saveSettings,
 } from './support'
@@ -12,7 +13,7 @@ import {
 test.beforeAll(async () => {
   await saveSettings({ mode: 'provision' })
   await resetPerson('carol')
-  await deleteSynaplanAccount(EMAIL.carol)
+  await deleteSynaplanAccount('carol')
 })
 
 test.beforeEach(async () => {
@@ -31,12 +32,13 @@ test('with accounts created by the administrator, a person turns AI on once', as
 test('after the administrator deactivates AI, the person turns it back on with the same account', async ({ page }) => {
   await logIn(page, 'carol')
   await activateAndSummarize(page)
-  const account = await provisionedAccountIds(EMAIL.carol)
+  const account = ownedAccountIds('carol')
   expect(account).toHaveLength(1)
+  expect(await accountEmail(account[0])).toBe(EMAIL.carol)
 
   await resetPerson('carol')
   await page.reload()
   await activateAndSummarize(page)
 
-  expect(await provisionedAccountIds(EMAIL.carol)).toEqual(account)
+  expect(ownedAccountIds('carol')).toEqual(account)
 })

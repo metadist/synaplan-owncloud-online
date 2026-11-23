@@ -9,6 +9,7 @@ use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
 use OCP\Http\Client\IResponse;
+use OCP\Lock\ILockingProvider;
 use PHPUnit\Framework\TestCase;
 
 final class OAuthClientTest extends TestCase
@@ -204,6 +205,108 @@ final class OAuthClientTest extends TestCase
         self::assertTrue($this->oauth()->isConnected('ada'));
     }
 
+    public function testAGrantWithdrawnDuringARefreshIsNotBroughtBackByItsAnswer(): void
+    {
+        $this->register('client-1');
+        $this->connect('ada', 'access-old', -60);
+        $this->config->keepWhatThisRequestRead();
+        $this->http->answer(function (string $method, string $path): array {
+            if ($path === '/oauth/token') {
+                // A withdrawal in another request that could not wait forgets
+                // the grant meanwhile.
+                unset($this->config->user['ada']['oco_synaplan']);
+
+                return ['access_token' => 'access-new', 'refresh_token' => 'refresh-2', 'expires_in' => 900];
+            }
+
+            return [];
+        });
+
+        self::assertSame('', $this->oauth()->accessToken('ada'));
+
+        self::assertSame([], $this->grant());
+        self::assertSame('refresh-2', $this->http->to('/oauth/revoke')[0]['body']['token'] ?? null, 'the grant the answer carried is ended too');
+    }
+
+    public function testAWithdrawalBetweenTheCheckAndTheWriteIsNotUndoneByTheRefresh(): void
+    {
+        $this->register('client-1');
+        $this->connect('ada', 'access-old', -60);
+        $this->config->keepWhatThisRequestRead();
+        $this->http->answer(static fn (string $method, string $path): array => $path === '/oauth/token'
+            ? ['access_token' => 'access-new', 'refresh_token' => 'refresh-2', 'expires_in' => 900]
+            : []);
+        // A withdrawal in another request that could not wait for the lock
+        // counts itself and deletes the grant just before the refresh writes
+        // its answer.
+        $this->config->beforeUserWrite = function (string $uid, string $key, string $value): void {
+            if ($key === 'synaplan_oauth_refresh' && $value === FakeCrypto::stored('refresh-2')) {
+                $this->config->user['ada']['oco_synaplan'] = ['synaplan_oauth_withdrawals' => '1'];
+            }
+        };
+
+        self::assertSame('', $this->oauth()->accessToken('ada'));
+
+        self::assertSame(['synaplan_oauth_withdrawals' => '1'], $this->config->user['ada']['oco_synaplan']);
+        self::assertSame('refresh-2', $this->http->to('/oauth/revoke')[0]['body']['token'] ?? null);
+    }
+
+    public function testForgettingAndRevokingWaitForARefreshUnderWay(): void
+    {
+        $locked = [];
+        $released = [];
+        $locks = $this->createStub(ILockingProvider::class);
+        $locks->method('acquireLock')->willReturnCallback(static function (string $path) use (&$locked): void {
+            $locked[] = $path;
+        });
+        $locks->method('releaseLock')->willReturnCallback(static function (string $path) use (&$released): void {
+            $released[] = $path;
+        });
+        $this->locking = $locks;
+        $this->register('client-1');
+        $this->connect('ada');
+
+        $this->oauth()->forget('ada');
+        $this->connect('ada');
+        $this->oauth()->revoke('ada');
+
+        $lock = 'oco_synaplan/oauth-refresh/ada';
+        self::assertSame([$lock, $lock], $locked);
+        self::assertSame([$lock, $lock], $released);
+        self::assertSame([], $this->grant());
+    }
+
+    public function testRevokeTakesTheTokenARefreshUnderWayRotatedTo(): void
+    {
+        $locks = $this->createStub(ILockingProvider::class);
+        $locks->method('acquireLock')->willReturnCallback(function (): void {
+            // The refresh holding the lock, in another request, finishes
+            // before it lets go.
+            $this->config->user['ada']['oco_synaplan']['synaplan_oauth_refresh'] = FakeCrypto::stored('refresh-2');
+        });
+        $this->locking = $locks;
+        $this->register('client-1');
+        $this->connect('ada');
+        $this->config->keepWhatThisRequestRead();
+        self::assertTrue($this->oauth()->isConnected('ada'), 'this request read the grant before the refresh rotated it');
+
+        $this->oauth()->revoke('ada');
+
+        self::assertSame('refresh-2', $this->http->to('/oauth/revoke')[0]['body']['token']);
+    }
+
+    public function testForgettingCountsAWithdrawal(): void
+    {
+        $this->register('client-1');
+        $this->connect('ada');
+
+        $this->oauth()->forget('ada');
+        $this->connect('ada');
+        $this->oauth()->revoke('ada');
+
+        self::assertSame(['synaplan_oauth_withdrawals' => '2'], $this->config->user['ada']['oco_synaplan']);
+    }
+
     public function testACallAboutTheRegistrationIsSignedForThatEndpoint(): void
     {
         $this->register('client-1');
@@ -215,6 +318,16 @@ final class OAuthClientTest extends TestCase
         $claims = $this->verifiedClaims(substr($call['options']['headers']['Authorization'], strlen('Bearer ')));
         self::assertSame(self::SYNAPLAN . '/oauth/register/client-1', $claims['aud']);
         self::assertLessThanOrEqual(time() + 60, $claims['exp']);
+    }
+
+    /**
+     * The person's stored grant, without the withdrawal count that outlives it.
+     *
+     * @return array<string, string>
+     */
+    private function grant(): array
+    {
+        return array_diff_key($this->config->user['ada']['oco_synaplan'] ?? [], ['synaplan_oauth_withdrawals' => true]);
     }
 
     /**
