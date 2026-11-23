@@ -6,6 +6,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\CloudStatusController;
 use OCA\OcoSynaplan\Service\KeyStorage;
+use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
@@ -28,6 +29,8 @@ final class CloudStatusControllerTest extends TestCase
 
     /** @var list<array<string, mixed>> */
     private array $states = [];
+    /** @var list<array<string, mixed>> */
+    private array $watches = [];
 
     /** @var list<array<string, mixed>> */
     private array $recent = [];
@@ -42,11 +45,12 @@ final class CloudStatusControllerTest extends TestCase
         $this->config->setUserValue('ada', 'oco_synaplan', KeyStorage::USER_KEY, FakeCrypto::stored('sk_ada'));
         $this->offers = ['deliveries', 'cloud_status'];
         $this->states = [];
+        $this->watches = [];
         $this->recent = [];
         $this->nodes = [];
         $this->http->answer(fn (string $method, string $path): array|IResponse => match ($path) {
             '/.well-known/synaplan-configuration' => ['issuer' => self::SYNAPLAN, 'capabilities' => $this->offers],
-            '/api/v1/cloud/status' => ['items' => $this->states, 'watches' => []],
+            '/api/v1/cloud/status' => ['items' => $this->states, 'watches' => $this->watches],
             '/api/v1/cloud/files/42' => ['id' => 42, 'state' => 'searchable', 'knowledge_folder' => ['key' => 'Contracts', 'name' => 'Contracts'], 'kept_up_to_date' => true],
             '/api/v1/files' => ['files' => $this->recent],
             '/api/v1/config/runtime' => ['cloud_files' => ['glyphs' => self::GLYPHS]],
@@ -71,10 +75,22 @@ final class CloudStatusControllerTest extends TestCase
             'enabled' => true,
             'unreachable' => false,
             'items' => [['id' => '7', 'state' => 'searchable']],
+            'watches' => [],
             'glyphs' => self::GLYPHS,
             'openSynaplanUrl' => self::SYNAPLAN . '/files',
         ], $answer);
         self::assertSame([['id' => '7', 'version' => '"e1"']], $this->http->to('/api/v1/cloud/status')[0]['body']['items']);
+    }
+
+    public function testTheWatchesOnTheFilesAreShownAndReadStoppedWhileWatchingIsOff(): void
+    {
+        $this->watches = [['id' => 5, 'target_kind' => 'folder', 'target_id' => '7', 'state' => 'active']];
+        $status = fn (): array => $this->controller(['items' => [['id' => '7', 'version' => 'e']]])->status()->getData()['watches'];
+
+        self::assertSame($this->watches, $status());
+
+        $this->config->setAppValue('oco_synaplan', 'watch_folders', 'no');
+        self::assertSame([['policy_off' => 'watches'] + $this->watches[0]], $status());
     }
 
     public function testAtMostFiveHundredFilesAreAskedAtOnce(): void
@@ -91,7 +107,7 @@ final class CloudStatusControllerTest extends TestCase
         $this->offers = ['deliveries', 'pickups', 'read_scope'];
         $this->nodes[7] = $this->file(7, 'plan.docx');
 
-        self::assertSame(['success' => true, 'enabled' => false, 'items' => []], $this->controller(['items' => [['id' => '7', 'version' => 'e']]])->status()->getData());
+        self::assertSame(['success' => true, 'enabled' => false, 'items' => [], 'watches' => []], $this->controller(['items' => [['id' => '7', 'version' => 'e']]])->status()->getData());
         self::assertSame(['success' => true, 'enabled' => false], $this->controller()->detail(7)->getData());
         self::assertSame(['success' => true, 'files' => []], $this->controller()->searchable()->getData());
         self::assertSame([], $this->http->to('/api/v1/cloud/status'));
@@ -125,6 +141,7 @@ final class CloudStatusControllerTest extends TestCase
             'knowledgeFolder' => 'Contracts',
             'keptUpToDate' => true,
             'synaplanFileId' => 42,
+            'watches' => [],
             'glyphs' => self::GLYPHS,
             'openSynaplanUrl' => self::SYNAPLAN . '/files',
         ], $answer);
@@ -212,7 +229,7 @@ final class CloudStatusControllerTest extends TestCase
         $root = $this->createStub(IRootFolder::class);
         $root->method('getUserFolder')->willReturn($userFolder);
 
-        return new CloudStatusController($request, $this->cloudState(), $this->client(), $this->synaplanConfig(), $root, $this->session(), $this->urls());
+        return new CloudStatusController($request, $this->cloudState(), $this->client(), $this->synaplanConfig(), $root, $this->session(), $this->urls(), new WatchPolicy($this->config, $root, static fn (): array => ['users' => [], 'public' => false, 'remote' => false]));
     }
 
     private function file(int $id, string $name): File

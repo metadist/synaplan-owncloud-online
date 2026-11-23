@@ -473,6 +473,95 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertSame([], $this->http->calls);
     }
 
+    public function testWithWatchingOffTheAnnouncementLeavesOutWatches(): void
+    {
+        $this->register();
+        $this->config->setAppValue('oco_synaplan', 'watch_folders', 'no');
+
+        $this->links()->announce();
+
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events'], $this->http->to('/oauth/register/client-1')[0]['body']['app_capabilities']);
+    }
+
+    /**
+     * @return array<string, array{0: list<string>, 1: bool}>
+     */
+    public static function watchOffers(): array
+    {
+        return [
+            'cloud files on' => [['deliveries', 'cloud_status', 'source_events', 'watches'], true],
+            'cloud files off' => [['deliveries', 'pickups', 'read_scope'], false],
+        ];
+    }
+
+    /**
+     * @param list<string> $capabilities
+     */
+    #[DataProvider('watchOffers')]
+    public function testWatchingIsOnlyOfferedWhereSynaplanWatches(array $capabilities, bool $watches): void
+    {
+        $this->http->answer(static fn (): array => ['issuer' => self::SYNAPLAN, 'capabilities' => $capabilities]);
+
+        self::assertSame($watches, $this->links()->offersWatches());
+    }
+
+    public function testWatchesAreListedWithThePersonsOwnCredential(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada');
+        $this->http->answer(static fn (): array => ['items' => [['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'active']], 'paused_count' => 0]);
+
+        self::assertSame(
+            [['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'active']],
+            $this->links()->listWatches('ada'),
+        );
+        $call = $this->http->to('/api/v1/cloud/watches')[0];
+        self::assertSame(['GET', 'Bearer access-ada'], [$call['method'], $call['options']['headers']['Authorization']]);
+    }
+
+    public function testReconcileSendsIdsAndVersionsAndKeepsOnlyIds(): void
+    {
+        $this->register();
+        $this->connect('ada');
+        $this->http->answer(static fn (): array => ['process' => ['7', 9], 'forget' => ['8']]);
+
+        self::assertSame(
+            ['process' => ['7'], 'forget' => ['8']],
+            $this->links()->reconcileWatch('ada', 5, [['id' => '7', 'version' => 'e1'], ['id' => '8', 'version' => 'e2']]),
+        );
+        self::assertSame(
+            ['items' => [['id' => '7', 'version' => 'e1'], ['id' => '8', 'version' => 'e2']]],
+            $this->http->to('/api/v1/cloud/watches/5/reconcile')[0]['body'],
+        );
+    }
+
+    public function testAWatchFileGoesAsMultipartAndARefusalComesBackWithItsStatus(): void
+    {
+        $this->register();
+        $this->connect('ada');
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(409, '{"error":"invalid_watch","message":"This watch is not running."}'));
+
+        $answer = $this->links()->sendWatchFile('ada', 5, ['id' => '7', 'version' => 'e1'], ['bytes' => 'hello', 'name' => 'a.txt', 'mime' => 'text/plain']);
+
+        self::assertSame(409, $answer['status_code']);
+        self::assertSame('invalid_watch', $answer['error']);
+        $call = $this->http->to('/api/v1/cloud/watches/5/files')[0];
+        self::assertTrue($call['multipart']);
+        self::assertFalse($call['options']['http_errors']);
+        self::assertSame(['id' => '7', 'version' => 'e1', 'file' => 'hello'], $call['body']);
+        self::assertSame('a.txt', $call['options']['multipart'][2]['filename']);
+    }
+
+    public function testAPersonWhoseTokenCannotBeRenewedJustNowCanStillActLater(): void
+    {
+        $this->register();
+        self::assertFalse($this->links()->canActForLater('ada'));
+        self::assertFalse($this->links()->canActForLater(''));
+
+        $this->connect('ada', 'access-ada', -60);
+        self::assertTrue($this->links()->canActForLater('ada'));
+    }
+
     public function testLeavingSynaplanEndsTheRegistrationThereAndForgetsTheKeyHere(): void
     {
         $this->register();

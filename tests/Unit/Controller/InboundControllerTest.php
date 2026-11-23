@@ -13,6 +13,7 @@ use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SeenNotificationStore;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchSync;
 use OCA\OcoSynaplan\Tests\Unit\Support\MemoryCache;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\JSONResponse;
@@ -32,6 +33,7 @@ final class InboundControllerTest extends TestCase
     private FolderRead&MockObject $reads;
     private PlatformLinkService&MockObject $links;
     private UserAccountService&MockObject $accounts;
+    private WatchSync&MockObject $watches;
     private MemoryCache $cache;
     private MemorySeenNotifications $seen;
     private string $secret;
@@ -54,6 +56,7 @@ final class InboundControllerTest extends TestCase
         $this->links = $this->createMock(PlatformLinkService::class);
         $this->links->method('canActFor')->willReturnCallback(static fn (string $uid): bool => $uid === 'ada');
         $this->accounts = $this->createMock(UserAccountService::class);
+        $this->watches = $this->createMock(WatchSync::class);
         $this->cache = new MemoryCache();
         $this->seen = new MemorySeenNotifications();
     }
@@ -189,6 +192,7 @@ final class InboundControllerTest extends TestCase
     public function testAWithdrawnIdentityEndsTheLinkOfThePersonItNames(): void
     {
         $this->accounts->expects($this->once())->method('linkEnded')->with('ada');
+        $this->watches->expects($this->once())->method('request')->with('ada');
         $this->copies->expects($this->never())->method('handle');
 
         $response = $this->receive($this->signed($this->notice('identity_revoked', '2267', 'ada')));
@@ -199,6 +203,16 @@ final class InboundControllerTest extends TestCase
     public function testANoticeThisAppDoesNotHandleYetIsAcknowledged(): void
     {
         $this->copies->expects($this->never())->method('handle');
+
+        $response = $this->receive($this->signed($this->notice('something_new', '31', 'ada')));
+
+        self::assertSame(Http::STATUS_NO_CONTENT, $response->getStatus());
+    }
+
+    public function testChangedWatchesAreListedAgainOnTheNextRunWithoutCallingOut(): void
+    {
+        $this->watches->expects($this->once())->method('request')->with('ada');
+        $this->links->expects($this->never())->method('listWatches');
 
         $response = $this->receive($this->signed($this->notice('watches_changed', '31', 'ada')));
 
@@ -227,7 +241,7 @@ final class InboundControllerTest extends TestCase
         $time = $this->createStub(ITimeFactory::class);
         $time->method('getTime')->willReturn(self::NOW);
 
-        $controller = new class ($body, $request, $config, $keys ?? $this->keys, $this->seen, $this->copies, $this->reads, $this->links, $this->accounts, $this->cache, $time, $this->createStub(ILogger::class)) extends InboundController {
+        $controller = new class ($body, $request, $config, $keys ?? $this->keys, $this->seen, $this->copies, $this->reads, $this->links, $this->accounts, $this->cache, $time, $this->createStub(ILogger::class), $this->watches) extends InboundController {
             public function __construct(private string $sent, mixed ...$services)
             {
                 parent::__construct(...$services);

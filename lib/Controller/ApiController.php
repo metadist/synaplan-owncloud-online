@@ -20,6 +20,7 @@ use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
@@ -130,17 +131,22 @@ class ApiController extends Controller
      * only where the administrator lets people name folders and Synaplan
      * reads folders; the bird and the Synaplan tab only where Synaplan tells
      * what it made of each file, and "Keep it up to date" only where Synaplan
-     * hears when files change.
+     * hears when files change; watching where the administrator allows it and
+     * Synaplan watches.
      *
      * @NoAdminRequired
      */
     public function features(): JSONResponse
     {
+        $watches = WatchPolicy::watchingAllowedIn($this->config) && $this->links->offersWatches();
+
         return new JSONResponse([
             'translation' => $this->synaplanClient->offersTranslation(),
             'read_folders' => $this->readScope->ceiling() !== ReadScope::MODE_WATCHED && $this->links->readsFolders(),
             'file_state' => $this->cloudState->available(),
             'follows_changes' => $this->cloudState->followsChanges(),
+            'watches' => $watches,
+            'watch_shared' => $watches && WatchPolicy::sharedAllowedIn($this->config),
         ]);
     }
 

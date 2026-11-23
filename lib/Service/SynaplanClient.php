@@ -13,7 +13,9 @@ namespace OCA\OcoSynaplan\Service;
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Exception\SynaplanHttpException;
 use OCA\OcoSynaplan\Http\Failure;
+use OCA\OcoSynaplan\Http\PatchingClient;
 use OCP\AppFramework\Http;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
@@ -274,6 +276,53 @@ class SynaplanClient
     public function getFileGroups(): array
     {
         return $this->request('GET', '/api/v1/files/groups');
+    }
+
+    /**
+     * Tasks, shortcuts, knowledge folders and languages for the watch dialog.
+     *
+     * @return array<string, mixed>
+     * @throws \Exception on API error
+     */
+    public function watchOptions(): array
+    {
+        return $this->request('GET', '/api/v1/cloud/watches/options');
+    }
+
+    /**
+     * Start watching a folder or a file.
+     *
+     * @param array{target_kind: string, target_id: string, target_path: string, preset: string, task_id?: int|null, group_key?: string} $body
+     * @return array<string, mixed>
+     * @throws \Exception on API error
+     */
+    public function startWatch(array $body): array
+    {
+        return $this->request('POST', '/api/v1/cloud/watches', $body);
+    }
+
+    /**
+     * Pause or resume one of this person's watches. Synaplan resumes only a
+     * watch its owner paused and answers 409 with the reason otherwise.
+     *
+     * @param 'paused'|'active' $state
+     * @return array<string, mixed> the watch
+     * @throws \Exception on API error
+     */
+    public function updateWatch(int $id, string $state): array
+    {
+        return $this->request('PATCH', '/api/v1/cloud/watches/' . $id, ['state' => $state]);
+    }
+
+    /**
+     * Stop one of this person's watches. Files and results stay.
+     *
+     * @return array<string, mixed> the watch
+     * @throws \Exception on API error
+     */
+    public function stopWatch(int $id): array
+    {
+        return $this->request('DELETE', '/api/v1/cloud/watches/' . $id);
     }
 
     /**
@@ -872,6 +921,9 @@ class SynaplanClient
      */
     private function isInsufficientScope(\Exception $e): bool
     {
+        if ($e instanceof SynaplanHttpException) {
+            return $e->status === Http::STATUS_FORBIDDEN && str_contains($e->body, '"insufficient_scope"');
+        }
         if ($e->getCode() !== Http::STATUS_FORBIDDEN || !method_exists($e, 'getResponse')) {
             return false;
         }
@@ -893,6 +945,7 @@ class SynaplanClient
             'POST' => $client->post($url, $options),
             'PUT' => $client->put($url, $options),
             'DELETE' => $client->delete($url, $options),
+            'PATCH' => $client instanceof PatchingClient ? $client->patch($url, $options) : throw new \InvalidArgumentException('This HTTP client cannot send PATCH'),
             default => throw new \InvalidArgumentException("Unsupported HTTP method: {$method}"),
         };
     }

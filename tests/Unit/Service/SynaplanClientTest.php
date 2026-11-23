@@ -241,6 +241,24 @@ final class SynaplanClientTest extends TestCase
         self::assertSame('0', $notKept['body']['keep_synced']);
     }
 
+    public function testAWatchIsStartedPausedAndStoppedAtItsOwnAddress(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'shared');
+        $this->http->answer(static fn (): array => ['id' => 5, 'state' => 'active']);
+
+        $this->client()->watchOptions();
+        $this->client()->startWatch(['target_kind' => 'folder', 'target_id' => '30', 'target_path' => 'Incoming', 'preset' => 'keep_searchable']);
+        $this->client()->updateWatch(5, 'paused');
+        $this->client()->stopWatch(5);
+
+        self::assertSame(
+            [['GET', '/api/v1/cloud/watches/options'], ['POST', '/api/v1/cloud/watches'], ['PATCH', '/api/v1/cloud/watches/5'], ['DELETE', '/api/v1/cloud/watches/5']],
+            array_map(static fn (array $call): array => [$call['method'], $call['path']], $this->http->calls),
+        );
+        self::assertSame(['state' => 'paused'], $this->http->calls[2]['body']);
+        self::assertSame('Incoming', $this->http->calls[1]['body']['target_path']);
+    }
+
     public function testSynaplanIsAskedWhatItSupportsOnceForEachAddress(): void
     {
         $this->http->answer(static fn (): array => ['summary' => ['types' => ['translation']]]);

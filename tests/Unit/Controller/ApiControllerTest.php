@@ -49,9 +49,24 @@ final class ApiControllerTest extends TestCase
         $this->synaplanOffers($types, ['deliveries', 'pickups', 'read_scope']);
 
         self::assertSame(
-            ['translation' => $translation, 'read_folders' => true, 'file_state' => false, 'follows_changes' => false],
+            ['translation' => $translation, 'read_folders' => true, 'file_state' => false, 'follows_changes' => false, 'watches' => false, 'watch_shared' => false],
             $this->controller()->features()->getData(),
         );
+    }
+
+    public function testWatchingIsOfferedWhereSynaplanWatchesAndTheAdministratorAllowsIt(): void
+    {
+        $this->synaplanOffers([], ['deliveries', 'cloud_status', 'watches']);
+        $features = fn (): array => array_intersect_key($this->controller()->features()->getData(), ['watches' => 0, 'watch_shared' => 0]);
+
+        self::assertSame(['watches' => true, 'watch_shared' => true], $features());
+
+        $this->config->setAppValue('oco_synaplan', 'watch_shared_folders', 'no');
+        self::assertSame(['watches' => true, 'watch_shared' => false], $features());
+
+        $this->config->setAppValue('oco_synaplan', 'watch_shared_folders', 'yes');
+        $this->config->setAppValue('oco_synaplan', 'watch_folders', 'no');
+        self::assertSame(['watches' => false, 'watch_shared' => false], $features());
     }
 
     /**

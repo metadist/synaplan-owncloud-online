@@ -29,6 +29,7 @@ class LibraryImport
         private SynaplanClient $client,
         private IRootFolder $rootFolder,
         private ILogger $logger,
+        private OwnWrites $ownWrites,
     ) {
     }
 
@@ -93,6 +94,7 @@ class LibraryImport
             ]);
             throw FailureException::fromWrite($e);
         }
+        $this->ownWrites->note($file, time());
 
         $relative = ltrim((string) ($userFolder->getRelativePath($file->getPath()) ?? $file->getName()), '/');
         $directory = dirname($relative);

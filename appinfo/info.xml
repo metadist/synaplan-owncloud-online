@@ -61,6 +61,8 @@ Requires a running Synaplan server.
 	<background-jobs>
 		<job>OCA\OcoSynaplan\BackgroundJob\AdoptIdentitiesJob</job>
 		<job>OCA\OcoSynaplan\BackgroundJob\RefreshNotifyKeysJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\WatchFeedJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\WatchReconcileJob</job>
 	</background-jobs>
 	<navigation>
 		<name>Synaplan</name>

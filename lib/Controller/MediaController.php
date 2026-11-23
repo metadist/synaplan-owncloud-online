@@ -15,6 +15,7 @@ use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\CopyDelivery;
+use OCA\OcoSynaplan\Service\OwnWrites;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanFolders;
 use OCP\AppFramework\Controller;
@@ -40,6 +41,7 @@ class MediaController extends Controller
         private IUserSession $userSession,
         private SynaplanFolders $folders,
         private ILogger $logger,
+        private OwnWrites $ownWrites,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -132,6 +134,7 @@ class MediaController extends Controller
         } catch (\Throwable $e) {
             return $this->failed(FailureException::fromWrite($e), 'Media save failed');
         }
+        $this->ownWrites->note($file, time());
 
         $path = ltrim((string) ($userFolder->getRelativePath($file->getPath()) ?? $file->getName()), '/');
         $folder = dirname($path);

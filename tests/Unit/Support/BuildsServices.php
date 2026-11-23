@@ -16,6 +16,7 @@ use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchIndex;
 use OCP\App\IAppManager;
 use OCP\DB\QueryBuilder\IExpressionBuilder;
 use OCP\DB\QueryBuilder\IQueryBuilder;
@@ -178,6 +179,7 @@ trait BuildsServices
             $this->links(),
             $this->root ??= $this->createStub(IRootFolder::class),
             $this->locks(),
+            new WatchIndex($this->db()),
         );
     }
 

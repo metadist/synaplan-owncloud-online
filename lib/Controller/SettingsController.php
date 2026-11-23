@@ -19,6 +19,7 @@ use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
+use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IConfig;
@@ -81,6 +82,9 @@ class SettingsController extends Controller
             'delivery_url_default' => $this->platformLinks->defaultDeliveryUrl(),
             'read_scope_ceiling' => $this->readScope->ceiling(),
             'read_folder_cap' => $this->readScope->cap(),
+            'watch_folders' => WatchPolicy::watchingAllowedIn($this->config),
+            'watch_shared_folders' => WatchPolicy::sharedAllowedIn($this->config),
+            'background_jobs_mode' => WatchPolicy::jobsModeIn($this->config),
         ]);
     }
 
@@ -107,6 +111,8 @@ class SettingsController extends Controller
         ?string $delivery_url = null,
         ?string $read_scope_ceiling = null,
         ?int $read_folder_cap = null,
+        ?bool $watch_folders = null,
+        ?bool $watch_shared_folders = null,
     ): JSONResponse {
         // Always re-read the raw body so the boolean flags also surface for PUT.
         $body = file_get_contents('php://input');
@@ -160,6 +166,12 @@ class SettingsController extends Controller
                 }
                 if ($read_folder_cap === null && isset($decoded['read_folder_cap'])) {
                     $read_folder_cap = (int) $decoded['read_folder_cap'];
+                }
+                if ($watch_folders === null && is_bool($decoded['watch_folders'] ?? null)) {
+                    $watch_folders = $decoded['watch_folders'];
+                }
+                if ($watch_shared_folders === null && is_bool($decoded['watch_shared_folders'] ?? null)) {
+                    $watch_shared_folders = $decoded['watch_shared_folders'];
                 }
             }
         }
@@ -237,6 +249,13 @@ class SettingsController extends Controller
         }
 
         // An empty address means this server's own inbound route.
+        if ($watch_folders !== null) {
+            $this->config->setAppValue(Application::APP_ID, WatchPolicy::WATCHES_KEY, $watch_folders ? 'yes' : 'no');
+        }
+        if ($watch_shared_folders !== null) {
+            $this->config->setAppValue(Application::APP_ID, WatchPolicy::SHARED_KEY, $watch_shared_folders ? 'yes' : 'no');
+        }
+
         $deliveryError = '';
         if ($delivery_url !== null) {
             if ($delivery_url === '' || self::isHttpUrl($delivery_url)) {

@@ -11,10 +11,12 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\AppInfo;
 
+use OCA\OcoSynaplan\Http\ClientService;
 use OCA\OcoSynaplan\Service\SeenNotifications;
 use OCA\OcoSynaplan\Service\SeenNotificationStore;
 use OCP\AppFramework\App;
 use OCP\Files\Config\IUserMountCache;
+use OCP\Http\Client\IClientService;
 use OCP\Lock\ILockingProvider;
 
 /**
@@ -24,7 +26,7 @@ use OCP\Lock\ILockingProvider;
  * container only knows a fixed list of OCP interfaces
  * (OC\AppFramework\DependencyInjection\DIContainer) and does not ask the
  * server container for others. Interfaces outside that list are registered
- * here.
+ * here, and the HTTP client service is one that can also send PATCH.
  */
 class Application extends App
 {
@@ -44,6 +46,14 @@ class Application extends App
         $this->getContainer()->registerService(
             IUserMountCache::class,
             static fn () => \OC::$server->getMountProviderCollection()->getMountCache()
+        );
+        $this->getContainer()->registerService(
+            IClientService::class,
+            static fn () => new ClientService(
+                \OC::$server->getHTTPClientService(),
+                \OC::$server->getConfig(),
+                \OC::$server->getCertificateManager(null),
+            )
         );
         $this->getContainer()->registerAlias(SeenNotificationStore::class, SeenNotifications::class);
     }
