@@ -71,8 +71,13 @@ async function removeFolder(folder: Folder): Promise<void> {
   await folder.dav.dispose()
 }
 
-async function put(dav: APIRequestContext, path: string, text: string): Promise<string> {
-  const written = await dav.put(path, { data: text, headers: { 'Content-Type': 'text/plain' } })
+/** @param mtime the time the file says it was last changed, in seconds; now when left out */
+async function put(dav: APIRequestContext, path: string, text: string, mtime?: number): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'text/plain' }
+  if (mtime !== undefined) {
+    headers['X-OC-Mtime'] = String(mtime)
+  }
+  const written = await dav.put(path, { data: text, headers })
   expect(written.ok(), `writing ${path}`).toBe(true)
   return idAt(dav, path)
 }
@@ -363,10 +368,10 @@ test('resuming a task watch asks about the files that arrived while paused and s
     watchId = await startWatch(person, folder.id)
     // Synaplan's upload does not look at the preset; a translate watch asks.
     synaplanRun(`UPDATE BCLOUDWATCHES SET BPRESET='translate' WHERE BID=${watchId}`)
-    const dropWhilePaused = async (name: string) => {
+    const dropWhilePaused = async (name: string, mtime?: number) => {
       // Reconcile counts files changed after the second the watch started or resumed.
       await new Promise((resolve) => setTimeout(resolve, 1100))
-      const id = await put(folder.dav, `${folder.path}/${name}`, name)
+      const id = await put(folder.dav, `${folder.path}/${name}`, name, mtime)
       await new Promise((resolve) => setTimeout(resolve, 1500))
       feed()
       expect(itemsOf(watchId, id), `${name} waits while paused`).toBe('0')
@@ -376,13 +381,15 @@ test('resuming a task watch asks about the files that arrived while paused and s
     await page.goto(`${APP}/research`)
     const row = page.getByTestId('synaplan-watched-row').filter({ hasText: folder.name })
     const ask = dialogOf(page)
-    const question = ask.getByText('Also handle the files that arrived while paused (1)?')
+    const question = page.getByRole('alertdialog', { name: 'Resume watching' })
+    const asksAbout = (count: number) =>
+      expect(question).toHaveAccessibleDescription(`Also handle the files that arrived while paused (${count})?`)
 
     await row.getByTestId('synaplan-watched-pause').click()
     await expect(row.getByTestId('synaplan-watched-resume')).toBeVisible()
     const skipped = await dropWhilePaused('while-paused-1.txt')
     await row.getByTestId('synaplan-watched-resume').click()
-    await expect(question).toBeVisible()
+    await asksAbout(1)
     await ask.getByRole('button', { name: 'Only new files' }).click()
     await expect(row.getByTestId('synaplan-watched-pause')).toBeVisible()
     feed()
@@ -391,12 +398,15 @@ test('resuming a task watch asks about the files that arrived while paused and s
     await row.getByTestId('synaplan-watched-pause').click()
     await expect(row.getByTestId('synaplan-watched-resume')).toBeVisible()
     const kept = await dropWhilePaused('while-paused-2.txt')
+    // Moved or copied in with the time it was last changed elsewhere, long before the pause.
+    const old = await dropWhilePaused('moved-in-old.txt', Math.floor(Date.now() / 1000) - 365 * 86400)
     await row.getByTestId('synaplan-watched-resume').click()
-    await expect(question).toBeVisible()
+    await asksAbout(2)
     await ask.getByRole('button', { name: 'Handle them too' }).click()
     await expect(row.getByTestId('synaplan-watched-pause')).toBeVisible()
     feed()
     expect(itemsOf(watchId, kept), 'sent after resume').toBe('1')
+    expect(itemsOf(watchId, old), 'an older file that arrived while paused is sent too').toBe('1')
     expect(itemsOf(watchId, skipped), 'the first one stays out').toBe('0')
   } finally {
     occ('config:app:delete', 'oco_synaplan', 'watch_quiet_seconds')

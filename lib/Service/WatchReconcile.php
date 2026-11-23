@@ -76,7 +76,7 @@ class WatchReconcile
             }
         }
         if (!$newOnly) {
-            $this->ownWrites->prune($now);
+            $this->ownWrites->prune();
         }
     }
 
@@ -106,6 +106,9 @@ class WatchReconcile
         $quiet = WatchFeed::quietSecondsIn($this->config);
         $files = $this->candidates($watch);
         foreach (array_chunk(array_map(WatchSender::version(...), $files), self::BATCH, true) as $batch) {
+            if (microtime(true) > $deadline) {
+                return false;
+            }
             try {
                 $answer = $this->links->reconcileWatch($watch['uid'], $watch['id'], self::items($batch));
             } catch (\Throwable $e) {
@@ -160,9 +163,11 @@ class WatchReconcile
         if ($target === null || $this->policy->blocks($target)) {
             return [];
         }
+        // A file moved in keeps its older time; the queue says it arrived.
+        $queued = array_flip($this->index->queuedFiles($watch['id']));
         $files = [];
         foreach ($this->files($target) as $file) {
-            if ($watch['since'] === 0 || $file->getMTime() > $watch['since']) {
+            if ($watch['since'] === 0 || $file->getMTime() > $watch['since'] || isset($queued[(int) $file->getId()])) {
                 $files[(int) $file->getId()] = $file;
             }
         }

@@ -66,6 +66,38 @@ final class WatchReconcileTest extends TestCase
         $this->reconcile()->run(self::NOW, microtime(true) + 60, false);
     }
 
+    public function testAFileMovedInWhileThePausedWatchWaitedCountsDespiteItsOlderTime(): void
+    {
+        $paused = ['state' => 'paused', 'since' => self::NOW - 600] + self::WATCH;
+        $this->watching($paused, $this->folder([
+            $this->file(7, 'e7', self::NOW - 7200),
+            $this->file(8, 'e8', self::NOW - 86400),
+        ]));
+        $this->index->method('queuedFiles')->with(5)->willReturn([8]);
+        $this->links->expects($this->once())->method('reconcileWatch')
+            ->with('ada', 5, [['id' => '8', 'version' => 'e8']])
+            ->willReturn(['process' => ['8'], 'forget' => []]);
+
+        self::assertSame(1, $this->reconcile()->waiting($paused));
+    }
+
+    public function testAPassOutOfTimeAsksNoMoreAndIsTriedAgain(): void
+    {
+        $files = [];
+        for ($id = 1; $id <= 501; $id++) {
+            $files[] = $this->file($id, 'e' . $id, self::NOW - 600);
+        }
+        $this->watching(self::WATCH, $this->folder($files));
+        $this->links->expects($this->once())->method('reconcileWatch')->willReturnCallback(static function (): array {
+            usleep(30_000);
+
+            return ['process' => [], 'forget' => []];
+        });
+        $this->index->expects($this->never())->method('markReconciled');
+
+        $this->reconcile()->run(self::NOW, microtime(true) + 0.02, false);
+    }
+
     public function testASharedFolderIsNotAskedAboutWhileTheAdministratorTurnedThatOff(): void
     {
         $this->watching(self::WATCH, $this->folder([$this->file(7, 'e7', self::NOW)]));

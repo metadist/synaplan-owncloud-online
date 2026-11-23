@@ -38,11 +38,36 @@ final class WatchFeedTest extends TestCase
         $this->feed()->run(self::NOW, microtime(true) + 60);
     }
 
-    public function testAFileForAPausedWatchWaitsForTheNextPassInstead(): void
+    public function testAFileOfAWatchPausedMeanwhileStaysQueuedForTheOwnersAnswer(): void
     {
         $this->queue(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => self::NOW - 90, 'generation' => 'g1', 'attempts' => 0], ['state' => 'paused'] + self::WATCH);
         $this->sender->expects($this->never())->method('file');
+        $this->index->expects($this->never())->method('done');
+
+        $this->feed()->run(self::NOW, microtime(true) + 60);
+    }
+
+    public function testAFileOfAWatchThatNeedsAttentionIsLetGo(): void
+    {
+        $this->queue(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => self::NOW - 90, 'generation' => 'g1', 'attempts' => 0], ['state' => 'attention'] + self::WATCH);
+        $this->sender->expects($this->never())->method('file');
         $this->index->expects($this->once())->method('done')->with(self::row(7));
+
+        $this->feed()->run(self::NOW, microtime(true) + 60);
+    }
+
+    public function testAChangeQueuedBeforeTheOwnerResumedWithOnlyNewFilesIsLetGo(): void
+    {
+        $resumed = ['since' => self::NOW - 60] + self::WATCH;
+        $this->queue(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => self::NOW - 90, 'generation' => 'g1', 'attempts' => 0], $resumed);
+        $this->sender->expects($this->never())->method('file');
+        $this->index->expects($this->once())->method('done')->with(self::row(7));
+
+        $this->feed()->run(self::NOW, microtime(true) + 60);
+
+        $this->setUp();
+        $this->queue(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => self::NOW - 30, 'generation' => 'g1', 'attempts' => 0], $resumed);
+        $this->sender->expects($this->once())->method('file')->willReturn(WatchSender::SENT);
 
         $this->feed()->run(self::NOW, microtime(true) + 60);
     }

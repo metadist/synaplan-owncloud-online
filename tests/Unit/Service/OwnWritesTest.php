@@ -20,6 +20,8 @@ final class OwnWritesTest extends TestCase
     /** @var array<int, array{written: int, version: string}> */
     private array $rows = [];
     private bool $tableExists = true;
+    /** @var list<int> the files the file cache still has */
+    private array $files = [7, 8];
 
     public function testAWriteIsKeptWithTheVersionTheFileHasAfterIt(): void
     {
@@ -27,8 +29,16 @@ final class OwnWritesTest extends TestCase
 
         self::assertSame([7 => ['written' => self::NOW, 'version' => 'e1']], $this->rows);
         self::assertTrue($this->writes()->isOwnVersion(7, 'e1'));
-        self::assertFalse($this->writes()->isOwnVersion(7, 'e2'), 'a person changed it since');
         self::assertFalse($this->writes()->isOwnVersion(8, 'e1'));
+    }
+
+    public function testOnceAPersonChangedTheFileItsMarkGoes(): void
+    {
+        $this->writes()->note($this->file(7, 'e1'), self::NOW);
+
+        self::assertFalse($this->writes()->isOwnVersion(7, 'e2'), 'a person changed it since');
+        self::assertSame([], $this->rows);
+        self::assertFalse($this->writes()->isOwnVersion(7, 'e1'));
     }
 
     public function testWritingTheFileAgainKeepsTheNewerVersion(): void
@@ -40,11 +50,17 @@ final class OwnWritesTest extends TestCase
         self::assertSame([7 => ['written' => self::NOW + 5, 'version' => 'e2']], $this->rows);
     }
 
-    public function testWritesOlderThanAWeekAreForgotten(): void
+    public function testAnOldWriteIsKeptWhileItsFileIsThereAndForgottenOnceItIsGone(): void
     {
-        $this->rows = [7 => ['written' => self::NOW - 8 * 86400, 'version' => 'e1'], 8 => ['written' => self::NOW - 86400, 'version' => 'e2']];
+        $this->rows = [7 => ['written' => self::NOW - 400 * 86400, 'version' => 'e1'], 8 => ['written' => self::NOW - 86400, 'version' => 'e2']];
 
-        $this->writes()->prune(self::NOW);
+        $this->writes()->prune();
+
+        self::assertSame([7, 8], array_keys($this->rows));
+        self::assertTrue($this->writes()->isOwnVersion(7, 'e1'), 'a watch started a year later still tells it apart');
+
+        $this->files = [8];
+        $this->writes()->prune();
 
         self::assertSame([8], array_keys($this->rows));
     }
@@ -54,7 +70,7 @@ final class OwnWritesTest extends TestCase
         $this->tableExists = false;
         $writes = $this->writes();
         $writes->note($this->file(7, 'e1'), self::NOW);
-        $writes->prune(self::NOW);
+        $writes->prune();
 
         self::assertSame([], $this->rows);
         self::assertFalse($writes->isOwnVersion(7, 'e1'));
@@ -90,7 +106,8 @@ final class OwnWritesTest extends TestCase
         $qb = $this->createStub(IQueryBuilder::class);
         $expr = $this->createStub(IExpressionBuilder::class);
         $expr->method('eq')->willReturnCallback(static fn (mixed $column, mixed $value): array => ['=', $value]);
-        $expr->method('lt')->willReturnCallback(static fn (mixed $column, mixed $value): array => ['<', $value]);
+        $expr->method('in')->willReturnCallback(static fn (mixed $column, mixed $value): array => ['in', $value]);
+        $expr->method('isNull')->willReturnCallback(static fn (mixed $column): array => ['gone']);
         $qb->method('expr')->willReturn($expr);
         $qb->method('createNamedParameter')->willReturnCallback(static fn (mixed $value): mixed => $value);
         foreach (['insert', 'update', 'delete', 'select'] as $method) {
@@ -100,7 +117,9 @@ final class OwnWritesTest extends TestCase
                 return $qb;
             });
         }
-        $qb->method('from')->willReturn($qb);
+        foreach (['from', 'leftJoin', 'setMaxResults'] as $method) {
+            $qb->method($method)->willReturn($qb);
+        }
         $qb->method('values')->willReturnCallback(static function (array $given) use ($qb, &$values): IQueryBuilder {
             $values = $given;
 
@@ -131,12 +150,13 @@ final class OwnWritesTest extends TestCase
                     return 1;
                 case 'delete':
                     $before = count($this->rows);
-                    $this->rows = array_filter($this->rows, static fn (array $row): bool => $row['written'] >= $where[1]);
+                    $this->rows = array_diff_key($this->rows, array_flip($where[1]));
 
                     return $before - count($this->rows);
                 default:
                     $result = $this->createStub(Result::class);
-                    $result->method('fetchOne')->willReturn($this->rows[$where[1]]['version'] ?? false);
+                    $result->method('fetchFirstColumn')->willReturn(array_values(array_diff(array_keys($this->rows), $this->files)));
+                    $result->method('fetchOne')->willReturn($this->rows[$where[1] ?? 0]['version'] ?? false);
 
                     return $result;
             }

@@ -31,6 +31,9 @@ use OCP\IDBConnection;
 class WatchIndex
 {
     public const ACTIVE = 'active';
+    public const PAUSED = 'paused';
+    /** Synaplan's `attention` with the reason `target_gone`: the watch lost its folder or file. */
+    public const TARGET_GONE = 'target_gone';
     public const TABLE = 'synaplan_watches';
     public const QUEUE = 'synaplan_watch_queue';
     private const KINDS = ['folder', 'file'];
@@ -103,7 +106,8 @@ class WatchIndex
 
     /**
      * Count only files that change from now on: the owner resumed the watch
-     * without the files that arrived while it was paused.
+     * without the files that arrived while it was paused, so the files
+     * queued before now go too. Events of the target stay.
      */
     public function restartFrom(int $watchId, int $since): void
     {
@@ -111,6 +115,12 @@ class WatchIndex
         $qb->update(self::TABLE)
             ->set('since', $qb->createNamedParameter($since, IQueryBuilder::PARAM_INT))
             ->where($qb->expr()->eq('watch_id', $qb->createNamedParameter($watchId, IQueryBuilder::PARAM_INT)))
+            ->execute();
+        $drop = $this->db->getQueryBuilder();
+        $drop->delete(self::QUEUE)
+            ->where($drop->expr()->eq('watch_id', $drop->createNamedParameter($watchId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($drop->expr()->isNull('event'))
+            ->andWhere($drop->expr()->lt('changed', $drop->createNamedParameter($since, IQueryBuilder::PARAM_INT)))
             ->execute();
     }
 
@@ -130,15 +140,18 @@ class WatchIndex
     }
 
     /**
-     * Active watches on any of these nodes: a file's own id (a file watch) or
-     * its parent folder's id (a folder watch).
+     * Watches that take files arriving on any of these nodes: active ones,
+     * and paused ones, which keep them until the owner resumes.
      *
      * @param list<int> $nodeIds
      * @return list<WatchRow>
      */
-    public function activeOn(array $nodeIds): array
+    public function queueingOn(array $nodeIds): array
     {
-        return array_values(array_filter($this->on($nodeIds), static fn (array $row): bool => $row['state'] === self::ACTIVE));
+        return array_values(array_filter(
+            $this->on($nodeIds),
+            static fn (array $row): bool => $row['state'] === self::ACTIVE || $row['state'] === self::PAUSED,
+        ));
     }
 
     /**
@@ -261,6 +274,28 @@ class WatchIndex
         }
     }
 
+    /**
+     * The files queued for a watch, events of its target left out: on a
+     * paused watch, the files that arrived while it was paused.
+     *
+     * @return list<int>
+     */
+    public function queuedFiles(int $watchId): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('file_id')->from(self::QUEUE)
+            ->where($qb->expr()->eq('watch_id', $qb->createNamedParameter($watchId, IQueryBuilder::PARAM_INT)))
+            ->andWhere($qb->expr()->isNull('event'));
+        $result = $this->query($qb);
+        $files = [];
+        while (($row = $result->fetchAssociative()) !== false) {
+            $files[] = (int) ($row['file_id'] ?? 0);
+        }
+        $result->free();
+
+        return $files;
+    }
+
     public function queued(int $watchId, int $fileId): bool
     {
         $qb = $this->db->getQueryBuilder();
@@ -276,18 +311,29 @@ class WatchIndex
     }
 
     /**
+     * The rows to send now. Files queued for a watch that is not running
+     * wait in the queue for it: a paused watch takes them on resume, or the
+     * owner lets them go.
+     *
      * @return list<QueueRow>
      */
     public function due(int $now, int $quietSeconds, int $limit): array
     {
         $qb = $this->db->getQueryBuilder();
-        $qb->select('*')->from(self::QUEUE)
-            ->where($qb->expr()->lte('due', $qb->createNamedParameter($now, IQueryBuilder::PARAM_INT)))
+        $qb->select('q.*')->from(self::QUEUE, 'q')
+            ->leftJoin('q', self::TABLE, 'w', $qb->expr()->eq('q.watch_id', 'w.watch_id'))
+            ->where($qb->expr()->lte('q.due', $qb->createNamedParameter($now, IQueryBuilder::PARAM_INT)))
             ->andWhere($qb->expr()->orX()->addMultiple([
-                $qb->expr()->isNotNull('event'),
-                $qb->expr()->lte('changed', $qb->createNamedParameter($now - $quietSeconds, IQueryBuilder::PARAM_INT)),
+                $qb->expr()->isNotNull('q.event'),
+                $qb->expr()->andX()->addMultiple([
+                    $qb->expr()->lte('q.changed', $qb->createNamedParameter($now - $quietSeconds, IQueryBuilder::PARAM_INT)),
+                    $qb->expr()->orX()->addMultiple([
+                        $qb->expr()->eq('w.state', $qb->createNamedParameter(self::ACTIVE)),
+                        $qb->expr()->isNull('w.watch_id'),
+                    ]),
+                ]),
             ]))
-            ->orderBy('changed', 'ASC')
+            ->orderBy('q.changed', 'ASC')
             ->setMaxResults($limit);
         $result = $this->query($qb);
         $rows = [];
@@ -397,6 +443,10 @@ class WatchIndex
             || !is_string($target) || !ctype_digit($target) || (int) $target <= 0
             || !is_string($state) || $state === '' || strlen($state) > 16) {
             return null;
+        }
+
+        if ($state === 'attention' && ($watch['reason'] ?? null) === self::TARGET_GONE) {
+            $state = self::TARGET_GONE;
         }
 
         return ['id' => $id, 'kind' => $kind, 'target' => (int) $target, 'state' => $state];

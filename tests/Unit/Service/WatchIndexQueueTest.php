@@ -58,6 +58,17 @@ final class WatchIndexQueueTest extends TestCase
         self::assertSame(['delete synaplan_watch_queue', 'where watch_id=5', 'where file_id=7', 'where generation="g1"'], $this->last());
     }
 
+    public function testResumingWithOnlyNewFilesLetsTheFilesQueuedBeforeGoButKeepsEvents(): void
+    {
+        $this->index()->restartFrom(5, 1700000000);
+
+        self::assertSame(['update synaplan_watches', 'set since=1700000000', 'where watch_id=5'], $this->statements[0]);
+        self::assertSame(
+            ['delete synaplan_watch_queue', 'where watch_id=5', 'where event IS NULL', 'where changed<1700000000'],
+            $this->last(),
+        );
+    }
+
     public function testARetryOfAReplacedRowLeavesTheNewerChange(): void
     {
         $this->index()->retryLater(['watch' => 5, 'file' => 7, 'event' => '', 'changed' => 100, 'generation' => 'g1', 'attempts' => 0], 160, 1);
@@ -83,6 +94,7 @@ final class WatchIndexQueueTest extends TestCase
         $qb = $this->createStub(IQueryBuilder::class);
         $expr = $this->createStub(IExpressionBuilder::class);
         $expr->method('eq')->willReturnCallback(static fn (mixed $x, mixed $y): string => $x . '=' . $y);
+        $expr->method('lt')->willReturnCallback(static fn (mixed $x, mixed $y): string => $x . '<' . $y);
         $expr->method('isNull')->willReturnCallback(static fn (mixed $x): string => $x . ' IS NULL');
         $qb->method('expr')->willReturn($expr);
         $qb->method('createNamedParameter')->willReturnCallback(function (mixed $value): IParameter {

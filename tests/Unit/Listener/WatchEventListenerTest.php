@@ -40,7 +40,16 @@ final class WatchEventListenerTest extends TestCase
 
     public function testAFileWrittenIntoAWatchedFolderIsQueuedAsChangedNow(): void
     {
-        $this->index->method('activeOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
+        $this->index->method('queueingOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
+        $this->index->expects($this->once())->method('enqueue')->with(5, 7, '', self::NOW);
+
+        $this->listener()->written($this->file(7, 30));
+    }
+
+    public function testAFileArrivingWhileTheWatchIsPausedWaitsForTheOwnersAnswer(): void
+    {
+        $paused = ['state' => 'paused'] + self::FOLDER_WATCH;
+        $this->index->method('queueingOn')->with([7, 30])->willReturn([$paused]);
         $this->index->expects($this->once())->method('enqueue')->with(5, 7, '', self::NOW);
 
         $this->listener()->written($this->file(7, 30));
@@ -49,7 +58,7 @@ final class WatchEventListenerTest extends TestCase
     public function testAFileWatchTakesNewVersionsOfItsFileOnly(): void
     {
         $fileWatch = ['id' => 6, 'kind' => 'file', 'target' => 7] + self::FOLDER_WATCH;
-        $this->index->method('activeOn')->willReturn([$fileWatch, ['id' => 9, 'target' => 7] + self::FOLDER_WATCH]);
+        $this->index->method('queueingOn')->willReturn([$fileWatch, ['id' => 9, 'target' => 7] + self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(6, 7, '', self::NOW);
 
         $this->listener()->written($this->file(7, 30));
@@ -57,7 +66,7 @@ final class WatchEventListenerTest extends TestCase
 
     public function testAFileMovedIntoAWatchedFolderArrivesThere(): void
     {
-        $this->index->method('activeOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
+        $this->index->method('queueingOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
         $this->index->method('on')->willReturn([]);
         $this->index->expects($this->once())->method('enqueue')->with(5, 7, '', self::NOW);
 
@@ -67,7 +76,7 @@ final class WatchEventListenerTest extends TestCase
     public function testTheAppsOwnWriteIsIgnored(): void
     {
         $this->ownWrites->method('isOwnVersion')->willReturnCallback(static fn (int $id, string $version): bool => $id === 7 && $version === 'e7');
-        $this->index->expects($this->never())->method('activeOn');
+        $this->index->expects($this->never())->method('queueingOn');
         $this->index->expects($this->never())->method('enqueue');
 
         $this->listener()->written($this->file(7, 30));
@@ -76,7 +85,7 @@ final class WatchEventListenerTest extends TestCase
     public function testAPersonsEditOfAFileThisAppWroteIsQueued(): void
     {
         $this->ownWrites->method('isOwnVersion')->willReturnCallback(static fn (int $id, string $version): bool => $version === 'e6');
-        $this->index->method('activeOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
+        $this->index->method('queueingOn')->with([7, 30])->willReturn([self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(5, 7, '', self::NOW);
 
         $this->listener()->written($this->file(7, 30));
@@ -117,7 +126,7 @@ final class WatchEventListenerTest extends TestCase
         $folder = $this->createStub(Folder::class);
         $folder->method('getId')->willReturn(30);
         $this->home->method('get')->willReturnCallback(static fn (string $path): Folder => $path === 'Incoming' ? $folder : throw new NotFoundException($path));
-        $this->index->method('on')->with([30])->willReturn([['id' => 8, 'state' => 'attention'] + self::FOLDER_WATCH]);
+        $this->index->method('on')->with([30])->willReturn([['id' => 8, 'state' => WatchIndex::TARGET_GONE] + self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(8, 30, 'restored', self::NOW);
 
         $this->listener()->restored(['filePath' => '/Incoming']);
@@ -127,8 +136,21 @@ final class WatchEventListenerTest extends TestCase
     {
         $folder = $this->createStub(Folder::class);
         $folder->method('getId')->willReturn(30);
-        $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH, ['id' => 8, 'state' => 'attention'] + self::FOLDER_WATCH]);
+        $this->index->method('on')->with([30])->willReturn([self::FOLDER_WATCH, ['id' => 8, 'state' => WatchIndex::TARGET_GONE] + self::FOLDER_WATCH]);
         $this->index->expects($this->once())->method('enqueue')->with(8, 30, 'restored', self::NOW);
+
+        $this->listener()->renamed($folder);
+    }
+
+    public function testAFolderMovedOntoThePlaceOfAPausedOrStuckWatchIsNoRestore(): void
+    {
+        $folder = $this->createStub(Folder::class);
+        $folder->method('getId')->willReturn(30);
+        $this->index->method('on')->with([30])->willReturn([
+            ['id' => 8, 'state' => 'paused'] + self::FOLDER_WATCH,
+            ['id' => 9, 'state' => 'attention'] + self::FOLDER_WATCH,
+        ]);
+        $this->index->expects($this->never())->method('enqueue');
 
         $this->listener()->renamed($folder);
     }
@@ -146,7 +168,7 @@ final class WatchEventListenerTest extends TestCase
 
     public function testNothingIsQueuedWhileMutedOrUnregistered(): void
     {
-        $this->index->expects($this->never())->method('activeOn');
+        $this->index->expects($this->never())->method('queueingOn');
         $this->muted = '1';
         $this->listener()->written($this->file(7, 30));
         $this->muted = '0';
@@ -156,7 +178,7 @@ final class WatchEventListenerTest extends TestCase
 
     public function testAFailingIndexNeverFailsTheWrite(): void
     {
-        $this->index->method('activeOn')->willThrowException(new \RuntimeException('no table'));
+        $this->index->method('queueingOn')->willThrowException(new \RuntimeException('no table'));
 
         $this->listener()->written($this->file(7, 30));
         $this->addToAssertionCount(1);

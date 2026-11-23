@@ -72,7 +72,12 @@ class WatchFeed
                 if ($result === WatchSender::SENT) {
                     $this->sync->request($watch['uid']);
                 }
-            } elseif ($watch['state'] !== WatchIndex::ACTIVE) {
+            } elseif ($watch['state'] === WatchIndex::PAUSED) {
+                // Paused since the row was read: it waits for the owner's answer on resume.
+                continue;
+            } elseif ($watch['state'] !== WatchIndex::ACTIVE
+                || ($watch['since'] > 0 && $row['changed'] < $watch['since'])) {
+                // Resumed with only new files: a change queued before that is let go.
                 $result = WatchSender::DROP;
             } else {
                 $result = $this->sender->file($watch, $row['file']);

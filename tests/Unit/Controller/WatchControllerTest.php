@@ -277,10 +277,16 @@ final class WatchControllerTest extends TestCase
     {
         $watch = ['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'active'];
         $this->client->method('updateWatch')->willReturn($watch);
-        $this->index->expects($this->once())->method('update');
-        $this->index->expects($this->once())->method('restartFrom')->with(5, 1700000000);
+        $order = [];
+        $this->index->expects($this->once())->method('update')->willReturnCallback(static function () use (&$order): void {
+            $order[] = 'active here';
+        });
+        $this->index->expects($this->once())->method('restartFrom')->with(5, 1700000000)->willReturnCallback(static function () use (&$order): void {
+            $order[] = 'queued files let go';
+        });
 
         $this->assertSame(200, $this->controller->update(5, 'active', false)->getStatus());
+        $this->assertSame(['queued files let go', 'active here'], $order);
     }
 
     /**

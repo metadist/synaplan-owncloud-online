@@ -147,7 +147,7 @@ class WatchEventListener
         } catch (\Throwable) {
             $parent = 0;
         }
-        foreach ($this->index->activeOn([$id, $parent]) as $watch) {
+        foreach ($this->index->queueingOn([$id, $parent]) as $watch) {
             if (WatchSender::belongs($watch, $node)) {
                 $this->index->enqueue($watch['id'], $id, '', $now);
             }
@@ -165,8 +165,10 @@ class WatchEventListener
             if ($watch['target'] !== $id) {
                 continue;
             }
-            $running = $watch['state'] === WatchIndex::ACTIVE;
-            if ($event === 'deleted' ? $running : !$running) {
+            $due = $event === 'deleted'
+                ? $watch['state'] === WatchIndex::ACTIVE
+                : $watch['state'] === WatchIndex::TARGET_GONE;
+            if ($due) {
                 $this->index->enqueue($watch['id'], $id, $event, $this->time->getTime());
             } elseif ($event === 'restored') {
                 $this->index->cancelEvent($watch['id'], $id, 'deleted');

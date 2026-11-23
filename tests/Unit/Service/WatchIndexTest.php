@@ -22,6 +22,18 @@ final class WatchIndexTest extends TestCase
         );
     }
 
+    public function testAWatchThatLostItsTargetIsKeptAsGone(): void
+    {
+        self::assertSame(
+            ['id' => 5, 'kind' => 'folder', 'target' => 30, 'state' => WatchIndex::TARGET_GONE],
+            WatchIndex::parse(['id' => 5, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'attention', 'reason' => 'target_gone']),
+        );
+        self::assertSame(
+            ['id' => 6, 'kind' => 'folder', 'target' => 30, 'state' => 'attention'],
+            WatchIndex::parse(['id' => 6, 'target_kind' => 'folder', 'target_id' => '30', 'state' => 'attention', 'reason' => 'task_gone']),
+        );
+    }
+
     /**
      * @return iterable<string, array{array<string, mixed>}>
      */
