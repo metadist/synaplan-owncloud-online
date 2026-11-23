@@ -523,6 +523,16 @@ export function runSourceEvents(uid: string): void {
 }
 
 /**
+ * Run every source events job in the list once, as cron's next run would.
+ * No one's event goes out while an older one of someone else has yet to
+ * reach the people it is shared with, so a journey that pauses cron starts
+ * with this: an event an earlier test left would hold back its own.
+ */
+export function runAllSourceEvents(): void {
+  queuedJobs('SourceEventsJob').forEach(runJob)
+}
+
+/**
  * Run `act` while the app sends what it asks of Synaplan to a closed port,
  * as when Synaplan cannot be reached, and give the app its address back.
  */

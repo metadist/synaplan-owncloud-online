@@ -190,9 +190,10 @@ person's background job tells Synaplan of their events with their own
 credential, in the order they happened, up to 100 to a call. Events Synaplan
 cannot take yet are tried again after 1, 5, 15 and 60 minutes, and given up
 after that; the person's later events wait for them, so a restore never
-reaches Synaplan before the deletion it undoes. A path longer than
-Synaplan's 255 bytes is sent empty, and Synaplan keeps the name it has.
-When Synaplan keeps the file up to date, it
+reaches Synaplan before the deletion it undoes. A change someone else made
+earlier to a file shared with you reaches your copy before yours does. A path
+longer than Synaplan's 255 bytes is sent empty, and Synaplan keeps the name it
+has. When Synaplan keeps the file up to date, it
 asks for the new version, and another background job uploads it with that
 person's credential, in place of Synaplan's copy. An upload that fails for
 now, because Synaplan cannot be reached or is busy, or the person's access

@@ -47,6 +47,23 @@ final class ArraySourceEventQueue extends SourceEventQueue
         return array_slice($rows, 0, $limit);
     }
 
+    public function shares(string $uid, int $limit): array
+    {
+        return array_slice(array_values(array_filter($this->head($uid, PHP_INT_MAX), static fn (array $row): bool => $row['step'] === self::STEP_SHARE)), 0, $limit);
+    }
+
+    public function oldestShare(string $exceptUid): ?array
+    {
+        $oldest = null;
+        foreach ($this->rows as $row) {
+            if ($row['step'] === self::STEP_SHARE && $row['uid'] !== $exceptUid && ($oldest === null || $row['ord'] < $oldest['ord'])) {
+                $oldest = ['uid' => $row['uid'], 'ord' => $row['ord']];
+            }
+        }
+
+        return $oldest;
+    }
+
     /** @var list<array{storage: int, path: string, id: int, etag: string}> */
     public array $fileCache = [];
     /** Statements that read the file cache. */

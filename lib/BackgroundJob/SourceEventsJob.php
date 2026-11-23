@@ -33,11 +33,14 @@ use OCP\Lock\LockedException;
  * holding back the person's events after them, and given up after that. The
  * files of a moved folder are queued here, 500 at a time, ahead of the
  * events after the move; those of a deleted folder wait until the deletion
- * went through, for ten minutes at most.
+ * went through, for ten minutes at most. A person's events go to the people
+ * the file is shared with first, and no one's event goes out while an older
+ * one of someone else has yet to: it may join their queue ahead of it.
  *
  * ownCloud.online cannot schedule a job for later: each person's job stays
  * in the list while their queue holds events, and a run that finds the head
- * waiting returns at once.
+ * waiting, or behind an older event of someone else still to reach it,
+ * returns at once.
  *
  * @phpstan-import-type QueuedEvent from SourceEventQueue
  */
@@ -134,6 +137,15 @@ class SourceEventsJob extends Job
     private function drain(string $uid): void
     {
         $until = $this->time->getTime() + self::BUDGET;
+        while (($shares = $this->queue->shares($uid, self::BATCH)) !== []) {
+            foreach ($shares as $row) {
+                $this->share($row);
+                $this->queue->remove([$row['seq']]);
+            }
+            if ($this->time->getTime() >= $until) {
+                return;
+            }
+        }
         while (true) {
             $rows = $this->queue->head($uid, self::BATCH);
             if ($rows === []) {
@@ -157,7 +169,11 @@ class SourceEventsJob extends Job
                 $this->share($head);
                 $this->queue->remove([$head['seq']]);
             } elseif ($head['step'] === SourceEventQueue::STEP_SEND) {
-                $this->send($uid, $this->leadingSends($rows, $now), $now);
+                $batch = $this->beforeOthersShares($uid, $this->leadingSends($rows, $now));
+                if ($batch === []) {
+                    return;
+                }
+                $this->send($uid, $batch, $now);
             } else {
                 $this->queue->remove([$head['seq']]);
             }
@@ -165,6 +181,25 @@ class SourceEventsJob extends Job
                 return;
             }
         }
+    }
+
+    /**
+     * The rows older than any event of someone else that has yet to go to
+     * the people the file is shared with: it may join this queue ahead of
+     * the rest. That person's job is asked to run.
+     *
+     * @param non-empty-list<QueuedEvent> $batch
+     * @return list<QueuedEvent>
+     */
+    private function beforeOthersShares(string $uid, array $batch): array
+    {
+        $share = $this->queue->oldestShare($uid);
+        if ($share === null || $share['ord'] > $batch[array_key_last($batch)]['ord']) {
+            return $batch;
+        }
+        $this->jobs->add(self::class, ['uid' => $share['uid']]);
+
+        return array_values(array_filter($batch, static fn (array $row): bool => $row['ord'] < $share['ord']));
     }
 
     /**

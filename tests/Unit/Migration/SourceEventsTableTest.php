@@ -36,6 +36,7 @@ final class SourceEventsTableTest extends TestCase
         self::assertTrue($table->getColumn('seq')->getAutoincrement());
         self::assertSame(['seq'], $table->getPrimaryKey()?->getColumns());
         self::assertSame(['uid', 'ord', 'seq'], $table->getIndex('synaplan_source_ev_order')->getColumns());
+        self::assertSame(['step', 'ord'], $table->getIndex('synaplan_source_ev_step')->getColumns());
         self::assertSame('send', $table->getColumn('step')->getDefault());
         self::assertSame(255, $table->getColumn('path')->getLength());
     }

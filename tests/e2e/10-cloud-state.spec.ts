@@ -17,6 +17,7 @@ import {
   queuedEvents,
   type QueuedJob,
   queuedJobs,
+  runAllSourceEvents,
   runJob,
   runSourceEvents,
   shareWith,
@@ -219,6 +220,7 @@ test.describe('the state of a file in Synaplan', () => {
   test.beforeEach(async ({ page }) => {
     await logIn(page, UID)
     await ensureConnected(page)
+    runAllSourceEvents()
   })
 
   test('a searchable file carries the bird, and its Synaplan tab answers what the person asks', async ({ page }) => {

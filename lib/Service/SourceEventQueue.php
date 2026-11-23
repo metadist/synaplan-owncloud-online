@@ -34,6 +34,7 @@ class SourceEventQueue
     public const STEP_HELD = 'held';
     /** The people the file is shared with are still to be told. */
     public const STEP_SHARE = 'share';
+    private const COLUMNS = ['seq', 'ord', 'uid', 'file_id', 'event', 'version', 'path', 'step', 'walked', 'due', 'attempts'];
 
     public function __construct(
         private IDBConnection $db,
@@ -79,10 +80,61 @@ class SourceEventQueue
     public function head(string $uid, int $limit): array
     {
         $qb = $this->db->getQueryBuilder();
-        $qb->select(['seq', 'ord', 'uid', 'file_id', 'event', 'version', 'path', 'step', 'walked', 'due', 'attempts'])
+        $qb->select(self::COLUMNS)
+            ->from(self::TABLE)
+            ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid)));
+
+        return $this->rows($qb, $limit);
+    }
+
+    /**
+     * A person's events that still go to the people the file is shared
+     * with, oldest first.
+     *
+     * @return list<QueuedEvent>
+     */
+    public function shares(string $uid, int $limit): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select(self::COLUMNS)
             ->from(self::TABLE)
             ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid)))
+            ->andWhere($qb->expr()->eq('step', $qb->createNamedParameter(self::STEP_SHARE)));
+
+        return $this->rows($qb, $limit);
+    }
+
+    /**
+     * The oldest event of someone else that has yet to go to the people the
+     * file is shared with: until then, no one knows whose queue it joins.
+     *
+     * @return array{uid: string, ord: int}|null
+     */
+    public function oldestShare(string $exceptUid): ?array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select(['uid', 'ord'])
+            ->from(self::TABLE)
+            ->where($qb->expr()->eq('step', $qb->createNamedParameter(self::STEP_SHARE)))
+            ->andWhere($qb->expr()->neq('uid', $qb->createNamedParameter($exceptUid)))
             ->orderBy('ord', 'ASC')
+            ->setMaxResults(1);
+        $result = $qb->execute();
+        if (!$result instanceof Result) {
+            return null;
+        }
+        $row = $result->fetchAssociative();
+        $result->free();
+
+        return is_array($row) ? ['uid' => (string) $row['uid'], 'ord' => (int) $row['ord']] : null;
+    }
+
+    /**
+     * @return list<QueuedEvent>
+     */
+    private function rows(IQueryBuilder $qb, int $limit): array
+    {
+        $qb->orderBy('ord', 'ASC')
             ->addOrderBy('seq', 'ASC')
             ->setMaxResults($limit);
         $result = $qb->execute();

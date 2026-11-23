@@ -380,6 +380,44 @@ final class SourceEventsJobTest extends TestCase
         self::assertSame(['event' => 'changed', 'path' => 'spec.pdf'], array_intersect_key($this->queue->events()[0], ['event' => 0, 'path' => 0]));
     }
 
+    public function testAnEventWaitsForAnOlderOneOfSomeoneElseToReachItsQueue(): void
+    {
+        $this->nodes['ada'][42] = $this->node(Node::class, '/ada/files/Specs/spec.pdf', 'ada');
+        $this->nodes['carol'][42] = $this->node(Node::class, '/carol/files/From Ada/spec.pdf', 'ada');
+        $this->sharedWith = ['carol'];
+        $this->queue->add('ada', ['id' => '42', 'event' => 'changed', 'version' => 'e2', 'path' => 'Specs/spec.pdf'], 10, SourceEventQueue::STEP_SHARE);
+        $this->queue('ada', '42', 'changed', 10, 'Specs/spec.pdf');
+        $this->queue('carol', '42', 'changed', 20, 'From Ada/spec.pdf');
+        $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
+
+        $this->runJob(['uid' => 'carol']);
+
+        self::assertSame([], $this->sent, 'Ada changed the file first');
+        self::assertSame([['add', [SourceEventsJob::class, ['uid' => 'ada']]]], $this->list, 'Ada’s job is asked to run, and Carol’s stays in the list');
+
+        $this->runJob(['uid' => 'ada']);
+        $this->runJob(['uid' => 'carol']);
+
+        self::assertSame(['ada changed 42', 'carol changed 42', 'carol changed 42'], $this->sentEvents());
+        self::assertSame(['e2', 'e1'], array_column($this->sent[1][1], 'version'), 'Ada’s version before Carol’s');
+    }
+
+    public function testAPersonsEventsReachThePeopleTheyShareWithWhileTheirOwnWaitForARetry(): void
+    {
+        $this->nodes['ada'][42] = $this->node(Node::class, '/ada/files/Specs/spec.pdf', 'ada');
+        $this->nodes['carol'][42] = $this->node(Node::class, '/carol/files/From Ada/spec.pdf', 'ada');
+        $this->sharedWith = ['carol'];
+        $this->queue('ada', '7', 'changed', 5);
+        $this->queue->retryLater([1], 1, 2_000);
+        $this->queue->add('ada', ['id' => '42', 'event' => 'changed', 'version' => 'e2', 'path' => 'Specs/spec.pdf'], 10, SourceEventQueue::STEP_SHARE);
+        $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame(['ada send 7', 'carol send 42'], $this->queue->steps());
+        self::assertSame([], $this->sent);
+    }
+
     public function testARestoredFolderIsQueuedFromTheFileCacheForThePeopleItIsSharedWith(): void
     {
         $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Specs', 'ada');
