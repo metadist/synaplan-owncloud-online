@@ -64,10 +64,8 @@ final class WatchIndexQueueTest extends TestCase
         $this->index()->restartFrom(5, 1700000000);
 
         self::assertSame(['update synaplan_watches', 'set since=1700000000', 'where watch_id=5'], $this->statements[0]);
-        self::assertSame(
-            ['delete synaplan_watch_queue', 'where watch_id=5', 'where event IS NULL', 'where changed<1700000000'],
-            $this->last(),
-        );
+        // A file queued in the resume's own second goes too.
+        self::assertSame(['delete synaplan_watch_queue', 'where watch_id=5', 'where event IS NULL'], $this->last());
     }
 
     public function testASyncThatReadSynaplansListBeforeTheResumeLeavesTheNewStart(): void
@@ -99,7 +97,6 @@ final class WatchIndexQueueTest extends TestCase
         $qb = $this->createStub(IQueryBuilder::class);
         $expr = $this->createStub(IExpressionBuilder::class);
         $expr->method('eq')->willReturnCallback(static fn (mixed $x, mixed $y): string => $x . '=' . $y);
-        $expr->method('lt')->willReturnCallback(static fn (mixed $x, mixed $y): string => $x . '<' . $y);
         $expr->method('isNull')->willReturnCallback(static fn (mixed $x): string => $x . ' IS NULL');
         $qb->method('expr')->willReturn($expr);
         $qb->method('createNamedParameter')->willReturnCallback(function (mixed $value): IParameter {
