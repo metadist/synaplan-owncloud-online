@@ -270,7 +270,7 @@ final class OAuthClientTest extends TestCase
         $this->connect('ada');
         $this->oauth()->revoke('ada');
 
-        $lock = 'oco_synaplan/oauth-refresh/ada';
+        $lock = 'oco_synaplan/oauth-refresh/' . md5('ada');
         self::assertSame([$lock, $lock], $locked);
         self::assertSame([$lock, $lock], $released);
         self::assertSame([], $this->grant());
@@ -293,6 +293,31 @@ final class OAuthClientTest extends TestCase
         $this->oauth()->revoke('ada');
 
         self::assertSame('refresh-2', $this->http->to('/oauth/revoke')[0]['body']['token']);
+    }
+
+    public function testAPersonWithALongUserIdRefreshesAndDisconnects(): void
+    {
+        $uid = str_repeat('u', 64);
+        $locks = $this->createStub(ILockingProvider::class);
+        $locks->method('acquireLock')->willReturnCallback(static function (string $path): void {
+            // As ownCloud's database lock provider refuses it.
+            if (strlen($path) > 64) {
+                throw new \InvalidArgumentException('Lock key length too long');
+            }
+        });
+        $this->locking = $locks;
+        $this->register('client-1');
+        $this->connect($uid, 'access-old', -60);
+        $this->http->answer(static fn (string $method, string $path): array => $path === '/oauth/token'
+            ? ['access_token' => 'access-new', 'refresh_token' => 'refresh-2', 'expires_in' => 900]
+            : []);
+
+        self::assertSame('access-new', $this->oauth()->accessToken($uid));
+
+        $this->oauth()->revoke($uid);
+
+        self::assertSame('refresh-2', $this->http->to('/oauth/revoke')[0]['body']['token'] ?? null);
+        self::assertFalse($this->oauth()->isConnected($uid));
     }
 
     public function testForgettingCountsAWithdrawal(): void
