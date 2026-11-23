@@ -157,6 +157,14 @@ final class SourceEventQueueTest extends TestCase
         );
     }
 
+    public function testWhichOfSomeFilesAreBelowAFolderIsReadFromTheFileCacheInOneStatement(): void
+    {
+        $this->cacheRows = [['fileid' => '53']];
+
+        self::assertSame([53], $this->queue()->within(['storage' => 3, 'path' => 'files/Specs'], [53, 50, 60]));
+        self::assertSame(['select filecache', 'where storage=3', 'where path LIKE "files/Specs/%"', 'where fileid IN [53,50,60]'], $this->statements[0]);
+    }
+
     public function testAFolderNoLongerInTheFileCacheQueuesNothing(): void
     {
         $this->queue()->addDescendants('ada', 50, 'deleted', 1_700, SourceEventQueue::STEP_HELD, 50);

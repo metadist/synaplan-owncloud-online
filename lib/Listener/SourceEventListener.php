@@ -159,12 +159,38 @@ class SourceEventListener
         foreach ($recipients as $uid) {
             $this->queue->add($uid, ['id' => $payload['id'], 'event' => 'deleted', 'version' => $payload['version'], 'path' => ''], $ord, SourceEventQueue::STEP_HELD, $id);
         }
+        $holding = $node instanceof Folder
+            ? [...$told, ...$recipients, ...$this->holdSharesBelow($id, [...$told, ...$recipients], $ord)]
+            : $recipients;
         // A deletion that fails says so nowhere: each person's job stays in
         // the list while their queue holds rows, and drops these once they
         // time out.
-        foreach ($node instanceof Folder ? [...$told, ...$recipients] : $recipients as $uid) {
+        foreach (array_unique($holding) as $uid) {
             $this->jobs->add(SourceEventsJob::class, ['uid' => $uid]);
         }
+    }
+
+    /**
+     * Those who have only a share of something below a deleted folder lose
+     * it with the folder.
+     *
+     * @param list<string> $told
+     * @return list<string> the people whose rows are held
+     */
+    private function holdSharesBelow(int $id, array $told, int $ord): array
+    {
+        try {
+            $folder = $this->queue->location($id);
+            $mounts = $folder === null ? [] : $this->recipients->mountedBelow($folder, $told);
+            foreach ($mounts as $mount) {
+                $this->queue->addDescendants($mount['uid'], $mount['root'], 'deleted', $ord, SourceEventQueue::STEP_HELD, $id);
+                $this->queue->add($mount['uid'], ['id' => (string) $mount['root'], 'event' => 'deleted', 'version' => '', 'path' => ''], $ord, SourceEventQueue::STEP_HELD, $id);
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return array_column($mounts, 'uid');
     }
 
     public function deleted(Node $node): void

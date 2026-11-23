@@ -175,7 +175,8 @@ When a file changes, moves, goes to the trash or comes back from it, the app
 queues the event for the person it happened to, and for a shared file for its
 owner and for each person it is shared with who holds a Synaplan connection,
 at the path they see it at, so the copies they made follow too; for a
-deletion they are noted before the shares go. For a folder, the same goes
+deletion they are noted before the shares go, also those who have only a
+share of something inside a deleted folder. For a folder, the same goes
 for each file and folder inside it. Renaming a folder shared with you
 changes its path for you alone, so only your copies are told; renaming one
 you share changes no path of the people you share it with, so theirs are

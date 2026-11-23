@@ -239,6 +239,35 @@ class SourceEventQueue
     }
 
     /**
+     * Which of these files and folders the file cache keeps below a folder.
+     *
+     * @param array{storage: int, path: string} $folder
+     * @param list<int> $ids
+     * @return list<int>
+     */
+    public function within(array $folder, array $ids): array
+    {
+        $out = [];
+        foreach (array_chunk($ids, 500) as $chunk) {
+            $qb = $this->db->getQueryBuilder();
+            $qb->select(['fileid'])
+                ->from('filecache')
+                ->where($qb->expr()->eq('storage', $qb->createNamedParameter($folder['storage'], IQueryBuilder::PARAM_INT)))
+                ->andWhere($this->below($qb, $folder['path']))
+                ->andWhere($qb->expr()->in('fileid', $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
+            $result = $qb->execute();
+            if ($result instanceof Result) {
+                while (($row = $result->fetchAssociative()) !== false) {
+                    $out[] = (int) $row['fileid'];
+                }
+                $result->free();
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Where the file cache keeps a folder: a node seen through a share
      * names its path below the share, the cache below its storage.
      *

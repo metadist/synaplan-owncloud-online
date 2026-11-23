@@ -43,6 +43,9 @@ final class SourceEventListenerTest extends TestCase
     /** @var list<string> the file cache paths below a share its recipient still has mounted */
     private array $kept = [];
 
+    /** @var list<array{uid: string, root: int}> who has a share below a folder */
+    private array $mountedBelow = [];
+
     private bool $unmounted = false;
 
     protected function setUp(): void
@@ -54,6 +57,7 @@ final class SourceEventListenerTest extends TestCase
         $this->sharedWith = [];
         $this->losing = [];
         $this->kept = [];
+        $this->mountedBelow = [];
         $this->unmounted = false;
         $this->events = new ArraySourceEventQueue();
     }
@@ -211,6 +215,22 @@ final class SourceEventListenerTest extends TestCase
             $this->queued,
             'each person’s job stays in the list while their queue holds rows, and drops these once they time out',
         );
+    }
+
+    public function testADeletedFolderTakesItsFilesFromThePeopleASubfolderIsSharedWith(): void
+    {
+        $folder = $this->specsFolder();
+        $this->events->cache(3, 'files/Specs/Old', 53, 'eo');
+        $this->mountedBelow = [['uid' => 'bob', 'root' => 53], ['uid' => 'ada', 'root' => 53]];
+        $listener = $this->listener();
+        $listener->deleting($folder);
+
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']], [SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
+
+        $listener->deleted($this->gone('/ada/files/Specs'));
+
+        self::assertSame(['ada send 51', 'ada send 52', 'ada send 53', 'bob send 52', 'bob send 53', 'ada send 50'], $this->events->steps());
+        self::assertContains([SourceEventsJob::class, ['uid' => 'bob']], array_slice($this->queued, 2));
     }
 
     public function testAFileThatLeftAFolderAfterAFailedDeletionIsNotDeletedWithIt(): void
@@ -435,6 +455,9 @@ final class SourceEventListenerTest extends TestCase
         $recipients->method('of')->willReturnCallback(fn (Node $node): array => $this->sharedWith[(int) $node->getId()] ?? []);
         $recipients->method('lost')->willReturnCallback(fn (Node $node, string $uid): bool => in_array($uid, $this->losing, true));
         $recipients->method('keptBelow')->willReturnCallback(fn (): array => $this->kept);
+        $recipients->method('mountedBelow')->willReturnCallback(
+            fn (array $folder, array $except): array => array_values(array_filter($this->mountedBelow, static fn (array $mount): bool => !in_array($mount['uid'], $except, true))),
+        );
 
         return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session(), $this->events, $recipients);
     }

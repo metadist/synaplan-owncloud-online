@@ -92,6 +92,20 @@ final class ArraySourceEventQueue extends SourceEventQueue
         }
     }
 
+    public function within(array $folder, array $ids): array
+    {
+        $prefix = $folder['path'] === '' ? '' : $folder['path'] . '/';
+        $out = [];
+        foreach ($this->fileCache as $entry) {
+            if ($entry['storage'] === $folder['storage'] && $entry['path'] !== $folder['path'] && str_starts_with($entry['path'], $prefix)
+                && in_array($entry['id'], $ids, true)) {
+                $out[] = $entry['id'];
+            }
+        }
+
+        return $out;
+    }
+
     public function location(int $fileId): ?array
     {
         foreach ($this->fileCache as $entry) {

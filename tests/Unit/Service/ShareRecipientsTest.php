@@ -93,6 +93,32 @@ final class ShareRecipientsTest extends TestCase
         self::assertSame([], $recipients->keptBelow('eve', ['storage' => 3, 'path' => 'files/Specs']));
     }
 
+    public function testThePeopleWithOnlyAShareBelowAFolderAreFoundInTheMountCache(): void
+    {
+        $queue = new ArraySourceEventQueue();
+        foreach ([1 => '', 50 => 'files/Specs', 51 => 'files/Specs/a.pdf', 53 => 'files/Specs/Old', 60 => 'files/Specsheet.pdf'] as $id => $path) {
+            $queue->cache(3, $path, $id);
+        }
+        $mountCache = $this->createMock(IUserMountCache::class);
+        $mountCache->method('getMountsForStorageId')->with(3)->willReturn(array_map(function (array $mount): ICachedMountInfo {
+            $user = $this->createStub(IUser::class);
+            $user->method('getUID')->willReturn($mount[0]);
+            $info = $this->createStub(ICachedMountInfo::class);
+            $info->method('getUser')->willReturn($user);
+            $info->method('getRootId')->willReturn($mount[1]);
+
+            return $info;
+        }, [['ada', 1], ['bob', 53], ['bob', 53], ['carol', 50], ['dan', 53], ['erin', 60], ['frank', 51], ['gus', 99]]));
+        $accounts = $this->createStub(UserAccountService::class);
+        $accounts->method('holdsCredential')->willReturnCallback(static fn (string $uid): bool => $uid !== 'dan');
+        $recipients = new ShareRecipients($accounts, $this->createStub(IRootFolder::class), $mountCache, $this->createStub(IUserManager::class), $queue);
+
+        self::assertSame(
+            [['uid' => 'bob', 'root' => 53], ['uid' => 'frank', 'root' => 51]],
+            $recipients->mountedBelow(['storage' => 3, 'path' => 'files/Specs'], ['ada']),
+        );
+    }
+
     /**
      * @param \Closure(): array<string, mixed> $access
      * @param (\Closure(string): bool)|null $holds

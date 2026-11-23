@@ -631,6 +631,49 @@ test.describe('the state of a file in Synaplan', () => {
     }
   })
 
+  test('the owner deletes a folder she shares only a folder inside of, and the copies of the person she shares it with leave Synaplan', async ({
+    browser,
+  }) => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const instance = await instanceId()
+    const { folder } = await shelf(dav, stamp)
+    const inner = `${folder}/Inner`
+    const kept = `kept-${stamp}.txt`
+    const keptId = await withoutCron(async () => {
+      expect((await dav.fetch(`${DAV}/${inner}`, { method: 'MKCOL' })).ok(), `making ${inner}`).toBe(true)
+      await put(dav, `${inner}/${kept}`, `Plan ${stamp}: Northwind delivers the tables in May.`)
+      runSourceEvents(UID)
+      return fileIdAt(dav, `${inner}/${kept}`)
+    })
+    try {
+      await withRecipient(browser, stamp, async (gus, theirs) => {
+        await shareWith(UID, inner, gus)
+        await makeSearchable(theirs, keptId, `Inner-${stamp}`, false)
+        const { synaplanFileId } = await detailOf(theirs, keptId)
+        expect(synaplanFileId, 'Gus has a copy of his own').toBeTruthy()
+        const innerId = await fileIdAt(dav, inner)
+
+        await withoutCron(async () => {
+          expect((await dav.delete(`${DAV}/${folder}`)).ok(), `moving ${folder} to the trash`).toBe(true)
+          expect(
+            queuedEvents(gus).map((queued) => `${queued.step} ${queued.event} ${queued.fileId}`),
+            'noted for Gus, who has only the folder inside, while his share was there',
+          ).toEqual([`send deleted ${keptId}`, `send deleted ${innerId}`])
+          runSourceEvents(UID)
+          runSourceEvents(gus)
+        })
+        expect(
+          synaplanFilesOf(instance, keptId).find((file) => file.id === synaplanFileId)?.deletedAt,
+          'Gus’s copy left Synaplan',
+        ).toBeGreaterThan(0)
+      })
+    } finally {
+      await dav.delete(`${DAV}/${folder}`)
+      await dav.dispose()
+    }
+  })
+
   test('the person a folder is shared with renames it or moves a folder inside it, and their copies follow', async ({
     browser,
   }) => {
