@@ -303,6 +303,23 @@ final class SourceEventsJobTest extends TestCase
         self::assertSame(['ada changed 7'], $this->sentEvents());
     }
 
+    public function testAJobWithOnlyTheHeldRowsOfADeletionThatNeverHappensDropsThemAndLeaves(): void
+    {
+        $this->now = 10_000;
+        $this->queue->add('bob', ['id' => '51', 'event' => 'deleted', 'version' => 'e1', 'path' => ''], 9_990 * 1_000_000, SourceEventQueue::STEP_HELD, 50);
+
+        $this->runJob(['uid' => 'bob']);
+
+        self::assertSame([], $this->list, 'the job stays in the list while the deletion may still happen');
+
+        $this->now += SourceEventsJob::HELD_FOR;
+        $this->runJob(['uid' => 'bob']);
+
+        self::assertSame([], $this->sent);
+        self::assertSame([], $this->queue->rows);
+        self::assertSame([['remove', [SourceEventsJob::class, ['uid' => 'bob']]]], $this->list);
+    }
+
     /**
      * A node seen at `$path`, where `$internalPath` is its place in the
      * mount it is on: `''` for the root of a share as its recipient sees it.

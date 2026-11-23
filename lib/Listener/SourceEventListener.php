@@ -159,6 +159,12 @@ class SourceEventListener
         foreach ($recipients as $uid) {
             $this->queue->add($uid, ['id' => $payload['id'], 'event' => 'deleted', 'version' => $payload['version'], 'path' => ''], $ord, SourceEventQueue::STEP_HELD, $id);
         }
+        // A deletion that fails says so nowhere: each person's job stays in
+        // the list while their queue holds rows, and drops these once they
+        // time out.
+        foreach ($node instanceof Folder ? [...$told, ...$recipients] : $recipients as $uid) {
+            $this->jobs->add(SourceEventsJob::class, ['uid' => $uid]);
+        }
     }
 
     public function deleted(Node $node): void

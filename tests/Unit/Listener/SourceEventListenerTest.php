@@ -107,7 +107,9 @@ final class SourceEventListenerTest extends TestCase
         $listener->deleting($this->file(42, '/ada/files/Specs/spec.pdf', 'ada', '"e2"'));
 
         self::assertSame(['bob held 42'], $this->events->steps(), 'read while the shares are still there');
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
 
+        $this->queued = [];
         $listener->deleted($this->gone('/ada/files/Specs/spec.pdf'));
 
         self::assertSame([
@@ -183,8 +185,9 @@ final class SourceEventListenerTest extends TestCase
         $listener->deleting($this->specsFolder());
 
         self::assertSame(['ada held 51', 'ada held 52'], $this->events->steps(), 'a delete can still fail');
-        self::assertSame([], $this->queued);
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
 
+        $this->queued = [];
         $listener->deleted($this->gone('/ada/files/Specs'));
 
         self::assertSame([
@@ -195,6 +198,19 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame(['ada send 51', 'ada send 52', 'ada send 50'], $this->events->steps());
         self::assertSame(1, $this->events->cacheReads);
         self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
+    }
+
+    public function testTheHeldRowsOfADeletionThatNeverHappensAreClearedOnceTheyTimeOut(): void
+    {
+        $this->sharedWith[50] = ['bob'];
+        $this->listener()->deleting($this->specsFolder());
+
+        self::assertSame(['ada held 51', 'ada held 52', 'bob held 51', 'bob held 52', 'bob held 50'], $this->events->steps());
+        self::assertSame(
+            [[SourceEventsJob::class, ['uid' => 'ada']], [SourceEventsJob::class, ['uid' => 'bob']]],
+            $this->queued,
+            'each person’s job stays in the list while their queue holds rows, and drops these once they time out',
+        );
     }
 
     public function testAFileThatLeftAFolderAfterAFailedDeletionIsNotDeletedWithIt(): void
