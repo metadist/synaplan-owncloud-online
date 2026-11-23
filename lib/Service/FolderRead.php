@@ -71,8 +71,8 @@ class FolderRead
 
     /**
      * What a read left when the request ran out of time: the whole read when
-     * that was before Synaplan said what to send, else the uploads still
-     * owed. It ends in a result call whatever fails on the way.
+     * that was before Synaplan said what to send, the uploads still owed, or
+     * only the result. It ends in a result call whatever fails on the way.
      */
     public function finish(string $id, string $uid): void
     {
@@ -81,6 +81,11 @@ class FolderRead
         $this->config->deleteUserValue($uid, Application::APP_ID, $key);
         $pending = $raw !== '' ? json_decode($raw, true) : null;
         if (!is_array($pending)) {
+            return;
+        }
+        if (is_array($pending['result'] ?? null)) {
+            $this->result($id, $uid, $pending['result'], null);
+
             return;
         }
         $sent = (int) ($pending['sent'] ?? 0);
@@ -104,7 +109,7 @@ class FolderRead
                 'app' => Application::APP_ID,
                 'message' => $e->getMessage(),
             ]);
-            $this->report($id, $uid, 'failed', $listed, $sent, $skipped, 'unreachable');
+            $this->report($id, $uid, 'failed', $listed, $sent, $skipped, 'unreachable', null);
         }
     }
 
@@ -123,7 +128,7 @@ class FolderRead
             return;
         }
         if ($this->uid((string) ($claim['external_id'] ?? '')) !== $uid) {
-            $this->report($id, $uid, 'failed', 0, 0, [], 'not_found');
+            $this->report($id, $uid, 'failed', 0, 0, [], 'not_found', $deadline);
 
             return;
         }
@@ -136,7 +141,7 @@ class FolderRead
                 'app' => Application::APP_ID,
                 'message' => $e->getMessage(),
             ]);
-            $this->report($id, $uid, 'failed', 0, 0, [], 'unreachable');
+            $this->report($id, $uid, 'failed', 0, 0, [], 'unreachable', $deadline);
         }
     }
 
@@ -149,13 +154,13 @@ class FolderRead
         $userFolder = $this->files->folderOf($uid);
         $folder = $this->folder($userFolder, $selector);
         if (!$folder instanceof Folder) {
-            $this->report($id, $uid, 'failed', 0, 0, [], 'not_found');
+            $this->report($id, $uid, 'failed', 0, 0, [], 'not_found', $deadline);
 
             return;
         }
         $relative = $this->relativeFolder($userFolder, $folder);
         if (!$this->scope->mayRead($uid, $relative)) {
-            $this->report($id, $uid, 'failed', 0, 0, [], 'outside_scope');
+            $this->report($id, $uid, 'failed', 0, 0, [], 'outside_scope', $deadline);
 
             return;
         }
@@ -182,7 +187,7 @@ class FolderRead
             }
             $answer = $this->links->submitPickupListing($id, $uid, $chunk, $seconds);
             if (isset($answer['status_code']) && (int) $answer['status_code'] !== 200) {
-                $this->report($id, $uid, 'failed', count($files), 0, [], 'unreachable');
+                $this->report($id, $uid, 'failed', count($files), 0, [], 'unreachable', $deadline);
 
                 return;
             }
@@ -233,13 +238,12 @@ class FolderRead
     {
         $left = [];
         foreach ($upload as $item) {
-            $seconds = $left === [] ? $this->secondsFor($deadline, self::UPLOAD_SECONDS) : null;
-            if ($seconds === null) {
+            $outcome = $left === [] && $this->secondsFor($deadline, self::UPLOAD_SECONDS) !== null
+                ? $this->uploadOne($id, $uid, $userFolder, $item, $deadline)
+                : false;
+            if ($outcome === false) {
                 $left[] = $item;
-                continue;
-            }
-            $outcome = $this->uploadOne($id, $uid, $userFolder, $item, $seconds);
-            if ($outcome === null) {
+            } elseif ($outcome === null) {
                 $sent++;
             } else {
                 $skipped[] = $outcome;
@@ -250,7 +254,7 @@ class FolderRead
 
             return;
         }
-        $this->close($id, $uid, $listed, $sent, $skipped);
+        $this->close($id, $uid, $listed, $sent, $skipped, $deadline);
     }
 
     /**
@@ -261,9 +265,9 @@ class FolderRead
      * reports.
      *
      * @param array{id: string, version: string} $item
-     * @return array{id: string, name: string, reason: string}|null null when the file was stored
+     * @return array{id: string, name: string, reason: string}|false|null null when the file was stored, false when the request has no time left to send it
      */
-    private function uploadOne(string $pickupId, string $uid, Folder $userFolder, array $item, int $timeoutSeconds): ?array
+    private function uploadOne(string $pickupId, string $uid, Folder $userFolder, array $item, ?int $deadline): array|false|null
     {
         $name = $item['id'];
         try {
@@ -284,6 +288,11 @@ class FolderRead
         } catch (\Throwable) {
             return ['id' => $item['id'], 'name' => $name, 'reason' => 'unreadable'];
         }
+        // Finding, checking and reading the file count against the time too.
+        $seconds = $this->secondsFor($deadline, self::UPLOAD_SECONDS);
+        if ($seconds === null) {
+            return false;
+        }
         try {
             $stored = $this->links->uploadPickupFile(
                 $pickupId,
@@ -293,7 +302,7 @@ class FolderRead
                 $bytes,
                 $name,
                 $mime,
-                max(1, $timeoutSeconds),
+                $seconds,
             );
         } catch (\Throwable) {
             return ['id' => $item['id'], 'name' => $name, 'reason' => 'unreachable'];
@@ -354,19 +363,19 @@ class FolderRead
     /**
      * @param list<array{id: string, name: string, reason: string}> $skipped
      */
-    private function close(string $id, string $uid, int $listed, int $sent, array $skipped): void
+    private function close(string $id, string $uid, int $listed, int $sent, array $skipped, ?int $deadline): void
     {
         $missing = array_filter(
             $skipped,
             static fn (array $row): bool => $row['reason'] !== 'type_not_read',
         );
-        $this->report($id, $uid, $missing === [] ? 'done' : 'partial', $listed, $sent, $skipped, null);
+        $this->report($id, $uid, $missing === [] ? 'done' : 'partial', $listed, $sent, $skipped, null, $deadline);
     }
 
     /**
      * @param list<array{id: string, name: string, reason: string}> $skipped
      */
-    private function report(string $id, string $uid, string $status, int $listed, int $sent, array $skipped, ?string $error): void
+    private function report(string $id, string $uid, string $status, int $listed, int $sent, array $skipped, ?string $error, ?int $deadline): void
     {
         $body = [
             'status' => $status,
@@ -377,8 +386,25 @@ class FolderRead
         if ($error !== null) {
             $body['error_code'] = $error;
         }
+        $this->result($id, $uid, $body, $deadline);
+    }
+
+    /**
+     * Synaplan waits for the result past the notification request, so a
+     * result the request has no time left for is sent by the job.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function result(string $id, string $uid, array $body, ?int $deadline): void
+    {
+        $seconds = $this->secondsFor($deadline, self::CALL_SECONDS);
+        if ($seconds === null) {
+            $this->later($id, $uid, ['result' => $body]);
+
+            return;
+        }
         try {
-            $this->links->reportPickupResult($id, $uid, $body);
+            $this->links->reportPickupResult($id, $uid, $body, $seconds);
         } catch (\Throwable $e) {
             $this->logger->warning('Could not report a folder read: {message}', [
                 'app' => Application::APP_ID,
