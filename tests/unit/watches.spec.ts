@@ -117,6 +117,17 @@ describe('pausing and resuming', () => {
     expect(calls('PATCH')).toEqual([])
   })
 
+  it('leaves the watch paused and says why when the waiting files cannot be counted', async () => {
+    fetch.mockImplementation(async () => Response.json({ success: false, error: 'watch_needs_edit' }, { status: 403 }))
+
+    expect(await resumeWatch(11)).toBeNull()
+    expect(OC.Notification.showTemporary).toHaveBeenCalledWith(
+      'Only people who may edit a folder or a file can watch it.',
+    )
+    expect(openModal).not.toHaveBeenCalled()
+    expect(calls('PATCH')).toEqual([])
+  })
+
   it('says why when Synaplan refuses', async () => {
     fetch.mockImplementation(async () => Response.json({ success: false, error: 'watch_needs_edit' }, { status: 403 }))
 

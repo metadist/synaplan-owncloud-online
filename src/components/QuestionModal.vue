@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, useId } from 'vue'
 
 const props = defineProps<{
   title: string
@@ -12,6 +12,8 @@ const props = defineProps<{
 }>()
 
 const confirmButton = ref<HTMLButtonElement | null>(null)
+const titleId = useId()
+const textId = useId()
 
 function answer(yes: boolean): void {
   props.onAnswer(yes)
@@ -22,9 +24,15 @@ onMounted(() => confirmButton.value?.focus())
 </script>
 
 <template>
-  <div role="alertdialog" aria-modal="true" data-testid="synaplan-question">
-    <h2>{{ title }}</h2>
-    <p>{{ text }}</p>
+  <div
+    role="alertdialog"
+    aria-modal="true"
+    :aria-labelledby="titleId"
+    :aria-describedby="textId"
+    data-testid="synaplan-question"
+  >
+    <h2 :id="titleId">{{ title }}</h2>
+    <p :id="textId">{{ text }}</p>
     <div class="oco-actions">
       <button type="button" class="oco-btn" data-testid="synaplan-question-reject" @click="answer(false)">
         {{ reject }}

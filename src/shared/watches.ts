@@ -56,15 +56,16 @@ export async function setWatchState(
  */
 export async function resumeWatch(id: number): Promise<WatchRow | null> {
   let handleWaiting: boolean | null = true
-  let waiting = 0
-  let asking = false
+  let answer: Awaited<ReturnType<typeof api.watchWaiting>>
   try {
-    const answer = await api.watchWaiting(id)
-    waiting = answer.waiting ?? 0
-    asking = answer.ask === true
-  } catch {
-    // Resuming still works; the next pass takes the waiting files.
+    answer = await api.watchWaiting(id)
+  } catch (error) {
+    // Without the count the owner could not choose; the watch stays paused.
+    notify(failureFromError(error).text)
+    return null
   }
+  const waiting = answer.waiting ?? 0
+  const asking = answer.ask === true
   if (asking && waiting > 0) {
     handleWaiting = await ask(
       t('Resume watching'),

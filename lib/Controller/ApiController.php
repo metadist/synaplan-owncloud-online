@@ -19,6 +19,7 @@ use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
+use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
 use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCP\App\IAppManager;
@@ -89,6 +90,7 @@ class ApiController extends Controller
         private ReadScope $readScope,
         private PlatformLinkService $links,
         private CloudStateService $cloudState,
+        private SynaplanConfig $synaplanConfig,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -131,14 +133,18 @@ class ApiController extends Controller
      * only where the administrator lets people name folders and Synaplan
      * reads folders; the bird and the Synaplan tab only where Synaplan tells
      * what it made of each file, and "Keep it up to date" only where Synaplan
-     * hears when files change; watching where the administrator allows it and
-     * Synaplan watches.
+     * hears when files change; watching where the administrator allows it,
+     * Synaplan watches, and the feed can send files: each person with their
+     * own account, from a server registered with Synaplan.
      *
      * @NoAdminRequired
      */
     public function features(): JSONResponse
     {
-        $watches = WatchPolicy::watchingAllowedIn($this->config) && $this->links->offersWatches();
+        $watches = WatchPolicy::watchingAllowedIn($this->config)
+            && $this->synaplanConfig->isPerUserAccountsEnabled()
+            && $this->synaplanConfig->isRegistered()
+            && $this->links->offersWatches();
 
         return new JSONResponse([
             'translation' => $this->synaplanClient->offersTranslation(),
