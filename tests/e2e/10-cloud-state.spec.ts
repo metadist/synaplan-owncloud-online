@@ -605,6 +605,53 @@ test.describe('the state of a file in Synaplan', () => {
     }
   })
 
+  test('the owner renames a folder she shares or a folder inside it, and only the people whose paths changed are told', async ({
+    browser,
+  }) => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const instance = await instanceId()
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    const renamed = `Renamed-${stamp}`
+    try {
+      const inner = await dav.fetch(`${DAV}/${folder}/Inner`, { method: 'MKCOL' })
+      expect(inner.ok(), `making ${folder}/Inner: HTTP ${inner.status()}`).toBe(true)
+      await withoutCron(async () => {
+        await davMove(dav, UID, `${folder}/${held}`, `${folder}/Inner/${held}`)
+        runSourceEvents(UID)
+      })
+      const innerId = await fileIdAt(dav, `${folder}/Inner`)
+
+      await withRecipient(browser, stamp, async (gus, theirs) => {
+        await shareWith(UID, folder, gus)
+        await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
+        const before = synaplanPathOf(instance, heldId)
+
+        await withoutCron(async () => {
+          await davMove(dav, UID, folder, renamed)
+          runSourceEvents(UID)
+          expect(stepsOf(gus), 'the share keeps its name in Gus’s files').toEqual([])
+        })
+        expect(synaplanPathOf(instance, heldId), 'Gus’s copy keeps its path').toBe(before)
+
+        await withoutCron(async () => {
+          await davMove(dav, UID, `${renamed}/Inner`, `${renamed}/Archive`)
+          runSourceEvents(UID)
+          expect(stepsOf(gus), 'a folder inside the share moves for Gus at his path').toEqual([
+            `send ${innerId} ${folder}/Archive`,
+            `walk ${innerId} ${folder}/Archive`,
+          ])
+          runSourceEvents(gus)
+        })
+        expect(synaplanPathOf(instance, heldId), 'Gus’s copy moved with the folder').toBe(`${folder}/Archive/${held}`)
+      })
+    } finally {
+      await dav.delete(`${DAV}/${renamed}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await dav.dispose()
+    }
+  })
+
   test('the person a folder is shared with removes it from their files or declines it, and their copies of what they no longer reach leave Synaplan', async ({
     browser,
   }) => {

@@ -188,7 +188,7 @@ class SourceEventsJob extends Job
         $event = ['id' => (string) $row['file_id'], 'event' => $row['event'], 'version' => $row['version']];
         foreach ($this->recipients->of($node, [$row['uid'], $owner]) as $uid) {
             $theirs = $this->nodeOf($uid, $row['file_id']);
-            if ($theirs === null) {
+            if ($theirs === null || ($row['event'] === 'moved' && self::isMountRoot($theirs))) {
                 continue;
             }
             $path = preg_match('#^/[^/]+/files/(.+)$#', $theirs->getPath(), $match) === 1 ? trim($match[1], '/') : '';
@@ -199,6 +199,20 @@ class SourceEventsJob extends Job
                 $this->queue->addDescendants($uid, $row['file_id'], 'restored', $row['ord'], SourceEventQueue::STEP_SEND);
             }
             $this->jobs->add(self::class, ['uid' => $uid]);
+        }
+    }
+
+    /**
+     * The root of a mount, such as a share as its recipient sees it: its
+     * mount point keeps its name when the owner moves what it shares, so no
+     * path of theirs changed.
+     */
+    private static function isMountRoot(Node $node): bool
+    {
+        try {
+            return $node->getInternalPath() === '';
+        } catch (\Throwable) {
+            return false;
         }
     }
 

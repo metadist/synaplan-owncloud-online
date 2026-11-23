@@ -291,14 +291,19 @@ final class SourceEventsJobTest extends TestCase
     }
 
     /**
+     * A node seen at `$path`, where `$internalPath` is its place in the
+     * mount it is on: `''` for the root of a share as its recipient sees it.
+     * By default it is on the person's own storage.
+     *
      * @param class-string<Node> $class
      */
-    private function node(string $class, string $path, string $owner): Node
+    private function node(string $class, string $path, string $owner, ?string $internalPath = null): Node
     {
         $user = $this->createStub(IUser::class);
         $user->method('getUID')->willReturn($owner);
         $node = $class === Folder::class ? $this->createStub(Folder::class) : $this->createStub(Node::class);
         $node->method('getPath')->willReturn($path);
+        $node->method('getInternalPath')->willReturn($internalPath ?? preg_replace('#^/[^/]+/#', '', $path));
         $node->method('getOwner')->willReturn($user);
 
         return $node;
@@ -323,15 +328,43 @@ final class SourceEventsJobTest extends TestCase
 
     public function testAMovedFolderIsWalkedForThePeopleItIsSharedWith(): void
     {
-        $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Specs', 'ada');
-        $this->nodes['carol'][50] = $this->node(Folder::class, '/carol/files/Specs', 'ada');
+        $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Projects/Specs', 'ada');
+        $this->nodes['carol'][50] = $this->node(Folder::class, '/carol/files/Projects/Specs', 'ada', 'Specs');
         $this->sharedWith = ['carol'];
-        $this->queue->add('ada', ['id' => '50', 'event' => 'moved', 'version' => 'e2', 'path' => 'Specs'], 10, SourceEventQueue::STEP_SHARE);
+        $this->queue->add('ada', ['id' => '50', 'event' => 'moved', 'version' => 'e2', 'path' => 'Projects/Specs'], 10, SourceEventQueue::STEP_SHARE);
         $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
 
         $this->runJob(['uid' => 'ada']);
 
         self::assertSame(['carol send 50', 'carol walk 50'], $this->queue->steps());
+    }
+
+    public function testWhoHasTheMovedFolderAsTheirShareKeepsTheirPathsAndIsNotTold(): void
+    {
+        $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Projects/Specs 2026', 'ada');
+        $this->nodes['bob'][50] = $this->node(Folder::class, '/bob/files/Specs', 'ada', '');
+        $this->nodes['carol'][50] = $this->node(Folder::class, '/carol/files/Projects/Specs 2026', 'ada', 'Specs 2026');
+        $this->sharedWith = ['bob', 'carol'];
+        $this->queue->add('ada', ['id' => '50', 'event' => 'moved', 'version' => 'e2', 'path' => 'Projects/Specs 2026'], 10, SourceEventQueue::STEP_SHARE);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame(['carol send 50', 'carol walk 50'], $this->queue->steps(), 'Bob’s share keeps its name; Carol sees the folder inside hers');
+        self::assertNotContains(['add', [SourceEventsJob::class, ['uid' => 'bob']]], $this->list);
+    }
+
+    public function testAFileSomeoneHasAsTheirShareIsNotMovedForThemButStillChanges(): void
+    {
+        $this->nodes['ada'][42] = $this->node(Node::class, '/ada/files/Archive/spec.pdf', 'ada');
+        $this->nodes['bob'][42] = $this->node(Node::class, '/bob/files/spec.pdf', 'ada', '');
+        $this->sharedWith = ['bob'];
+        $this->queue->add('ada', ['id' => '42', 'event' => 'moved', 'version' => 'e2', 'path' => 'Archive/spec.pdf'], 10, SourceEventQueue::STEP_SHARE);
+        $this->queue->add('ada', ['id' => '42', 'event' => 'changed', 'version' => 'e3', 'path' => 'Archive/spec.pdf'], 20, SourceEventQueue::STEP_SHARE);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame(['bob send 42'], $this->queue->steps());
+        self::assertSame(['event' => 'changed', 'path' => 'spec.pdf'], array_intersect_key($this->queue->events()[0], ['event' => 0, 'path' => 0]));
     }
 
     public function testARestoredFolderIsQueuedFromTheFileCacheForThePeopleItIsSharedWith(): void

@@ -175,7 +175,9 @@ owner and for each person it is shared with who holds a Synaplan connection,
 at the path they see it at, so the copies they made follow too; for a
 deletion they are noted before the shares go. For a folder, the same goes
 for each file and folder inside it. Renaming a folder shared with you
-changes its path for you alone, so only your copies are told. Removing a
+changes its path for you alone, so only your copies are told; renaming one
+you share changes no path of the people you share it with, so theirs are
+not. Removing a
 share from your files, or declining it, deletes your copies of what it
 held, except those you still reach through another share. The
 request reads no file below a folder, so a large one answers at once: the
