@@ -74,20 +74,14 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame([], $this->queued);
     }
 
-    public function testAMovedFolderReportsItselfAndEverythingInItAtOnceAndWakesThePersonOnce(): void
+    public function testAMovedFolderLeavesItsFilesToTheJob(): void
     {
-        $folder = $this->folder(3, '/ada/files/Archive', 'ada', [
-            $this->file(4, '/ada/files/Archive/a.txt', 'ada'),
-            $this->folder(5, '/ada/files/Archive/Old', 'ada', [$this->file(6, '/ada/files/Archive/Old/b.txt', 'ada')]),
-        ]);
+        $this->listener()->renamed($this->specsFolder());
 
-        $this->listener()->renamed($folder);
-
-        self::assertSame(
-            [['3', 'moved', 'Archive'], ['4', 'moved', 'Archive/a.txt'], ['5', 'moved', 'Archive/Old'], ['6', 'moved', 'Archive/Old/b.txt']],
-            array_map(static fn (array $event): array => [$event['id'], $event['event'], $event['path']], $this->events->events()),
-        );
+        self::assertSame(['ada send 50', 'ada walk 50'], $this->events->steps());
+        self::assertSame('Specs', array_values($this->events->rows)[1]['path']);
         self::assertCount(1, array_unique(array_map(static fn (array $row): int => $row['ord'], $this->events->rows)), 'one change, one order');
+        self::assertSame(0, $this->events->cacheReads);
         self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
@@ -103,23 +97,37 @@ final class SourceEventListenerTest extends TestCase
         self::assertLessThan($rows[1]['ord'], $rows[0]['ord']);
     }
 
-    public function testADeleteIsReportedOnceItWentThroughWithWhatTheFolderHeld(): void
+    public function testADeletedFolderQueuesItsFilesFromTheFileCacheOnceTheDeletionHappened(): void
     {
         $listener = $this->listener();
-        $folder = $this->folder(3, '/ada/files/Archive', 'ada', [$this->file(4, '/ada/files/Archive/a.txt', 'ada')]);
+        $listener->deleting($this->specsFolder());
 
-        $listener->deleting($folder);
-        self::assertSame([], $this->events->rows, 'a delete can still fail');
-        $gone = $this->createStub(Folder::class);
-        $gone->method('getPath')->willReturn('/ada/files/Archive');
-        $gone->method('getDirectoryListing')->willThrowException(new NotFoundException());
-        $listener->deleted($gone);
+        self::assertSame(['ada held 51', 'ada held 52'], $this->events->steps(), 'a delete can still fail');
+        self::assertSame([], $this->queued);
+
+        $listener->deleted($this->gone('/ada/files/Specs'));
+
+        self::assertSame([
+            ['uid' => 'ada', 'id' => '51', 'event' => 'deleted', 'version' => 'ea', 'path' => ''],
+            ['uid' => 'ada', 'id' => '52', 'event' => 'deleted', 'version' => 'eb', 'path' => ''],
+            ['uid' => 'ada', 'id' => '50', 'event' => 'deleted', 'version' => 'ef', 'path' => 'Specs'],
+        ], $this->events->events());
+        self::assertSame(['ada send 51', 'ada send 52', 'ada send 50'], $this->events->steps());
+        self::assertSame(1, $this->events->cacheReads);
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
+    }
+
+    public function testAFolderDeletedThroughAShareQueuesTheFilesTheOwnerKeepsInItForBoth(): void
+    {
+        $this->userFolders['ada'] = $this->userFolder([50 => $this->folder(50, '/ada/files/Specs', 'ada', [])]);
+        $listener = $this->listener();
+        $listener->deleting($this->specsFolder('/bob/files/From Ada/Specs'));
+        $listener->deleted($this->gone('/bob/files/From Ada/Specs'));
 
         self::assertSame(
-            [['3', 'deleted'], ['4', 'deleted']],
-            array_map(static fn (array $event): array => [$event['id'], $event['event']], $this->events->events()),
+            ['bob 51', 'bob 52', 'ada 51', 'ada 52', 'bob 50 From Ada/Specs', 'ada 50 Specs'],
+            array_map(static fn (array $event): string => trim($event['uid'] . ' ' . $event['id'] . ' ' . $event['path']), $this->events->events()),
         );
-        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
     public function testADeleteThatWasNotSeenStartingReportsNothing(): void
@@ -130,17 +138,18 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame([], $this->queued);
     }
 
-    public function testAFolderRestoredFromTheTrashComesBackWithWhatItHolds(): void
+    public function testARestoredFolderQueuesItsFilesFromTheFileCache(): void
     {
-        $restored = $this->folder(3, '/ada/files/Archive', 'ada', [$this->file(4, '/ada/files/Archive/a.txt', 'ada', '"e1"')]);
-        $this->userFolders['ada'] = $this->userFolder([], ['Archive' => $restored]);
+        $this->userFolders['ada'] = $this->userFolder([], ['Specs' => $this->specsFolder()]);
 
-        $this->listener()->restored(['filePath' => '/Archive', 'trashPath' => '/Archive.d1800000000']);
+        $this->listener()->restored(['filePath' => '/Specs', 'trashPath' => '/Specs.d1800000000']);
 
         self::assertSame(
-            [['ada', '3', 'restored', 'Archive'], ['ada', '4', 'restored', 'Archive/a.txt']],
+            [['ada', '50', 'restored', 'Specs'], ['ada', '51', 'restored', ''], ['ada', '52', 'restored', '']],
             array_map(static fn (array $event): array => [$event['uid'], $event['id'], $event['event'], $event['path']], $this->events->events()),
         );
+        self::assertSame(1, $this->events->cacheReads);
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
     }
 
     public function testARestoreWithoutAPersonOrAPathReportsNothing(): void
@@ -254,6 +263,40 @@ final class SourceEventListenerTest extends TestCase
         $file->method('getOwner')->willReturn($this->owner($owner));
 
         return $file;
+    }
+
+    /**
+     * Ada's folder `Specs` on storage 3, with two files below it in the file
+     * cache, as seen at `$path`. Listing it fails the test.
+     */
+    private function specsFolder(string $path = '/ada/files/Specs'): Folder
+    {
+        $this->events->cache(3, 'files/Specs', 50, 'ef');
+        $this->events->cache(3, 'files/Specs/a.pdf', 51, 'ea');
+        $this->events->cache(3, 'files/Specs/Old/b.pdf', 52, 'eb');
+        $this->events->cache(3, 'files/Specsheet.pdf', 60);
+        $folder = $this->createMock(Folder::class);
+        $folder->method('getType')->willReturn(FileInfo::TYPE_FOLDER);
+        $folder->method('getId')->willReturn(50);
+        $folder->method('getPath')->willReturn($path);
+        $folder->method('getEtag')->willReturn('ef');
+        $folder->method('getOwner')->willReturn($this->owner('ada'));
+        $folder->expects($this->never())->method('getDirectoryListing');
+
+        return $folder;
+    }
+
+    /**
+     * What the hook after a delete gets: the node is gone.
+     */
+    private function gone(string $path): Folder
+    {
+        $gone = $this->createStub(Folder::class);
+        $gone->method('getPath')->willReturn($path);
+        $gone->method('getId')->willThrowException(new NotFoundException());
+        $gone->method('getDirectoryListing')->willThrowException(new NotFoundException());
+
+        return $gone;
     }
 
     /**

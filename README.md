@@ -171,7 +171,11 @@ answer, no bird shows and the tab says "Couldn't check Synaplan right now".
 
 When a file changes, moves, goes to the trash or comes back from it, the app
 queues the event for the person it happened to, and for a shared file for its
-owner too; for a folder, also for each file and folder inside it. Each
+owner too; for a folder, also for each file and folder inside it. The
+request reads no file below a folder, so a large one answers at once: the
+files inside a deleted or restored folder go into the queue from the file
+cache in one statement, and those of a moved folder are queued by the
+background job, 500 at a time, ahead of what happened after the move. Each
 person's background job tells Synaplan of their events with their own
 credential, in the order they happened, up to 100 to a call. Events Synaplan
 cannot take yet are tried again after 1, 5, 15 and 60 minutes, and given up

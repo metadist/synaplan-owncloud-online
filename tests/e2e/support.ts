@@ -556,6 +556,26 @@ export function synaplanFilesOf(instance: string, fileId: string): SynaplanFileR
     })
 }
 
+/**
+ * The path Synaplan keeps for one file of this ownCloud.online, as a move
+ * reported it, from the test stack's database; '' when none is kept. The
+ * path has no spaces in the journeys.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function synaplanPathOf(instance: string, fileId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  return synaplanSql(
+    `SELECT CONCAT('path:', COALESCE(MAX(f.BORIGINALNAME), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}'`,
+    /path:(\S*)/,
+    `the Synaplan path of ${fileId}`,
+  )
+}
+
 /** This ownCloud.online's instance id at Synaplan, from the admin settings. */
 export async function instanceId(): Promise<string> {
   const admin = await ownCloudAs('admin')

@@ -18,6 +18,7 @@ import {
   SYNAPLAN_PERSON,
   synaplanAs,
   synaplanFilesOf,
+  synaplanPathOf,
   withoutCron,
 } from './support'
 
@@ -377,6 +378,67 @@ test.describe('the state of a file in Synaplan', () => {
       expect(await detailOf(person, heldId)).toMatchObject({ state: 'searchable' })
     } finally {
       await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await synaplan.dispose()
+      await person.dispose()
+      await dav.dispose()
+    }
+  })
+
+  test('a folder moved, trashed and restored takes the files in it along, queued outside the request', async () => {
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const person = await ownCloudAs(UID)
+    const synaplan = await synaplanAs(SYNAPLAN_PERSON)
+    const instance = await instanceId()
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    const moved = `Moved-${stamp}`
+    const knowledge = `Folder-${stamp}`
+    try {
+      await makeSearchable(person, heldId, knowledge, true)
+      const { synaplanFileId } = await detailOf(person, heldId)
+      const folderId = await fileIdAt(dav, folder)
+
+      await withoutCron(async () => {
+        const renamed = await dav.fetch(`${DAV}/${folder}`, {
+          method: 'MOVE',
+          headers: { Destination: `${OCO_URL}${DAV}/${moved}` },
+        })
+        expect(renamed.ok(), `moving ${folder}: HTTP ${renamed.status()}`).toBe(true)
+        expect(
+          queuedEvents(UID).map((queued) => `${queued.step} ${queued.fileId}`),
+          'the request queues the folder and leaves its files to the job',
+        ).toEqual([`send ${folderId}`, `walk ${folderId}`])
+
+        runSourceEvents(UID)
+        expect(queuedEvents(UID), 'the job queued and sent the files').toEqual([])
+      })
+      expect(synaplanPathOf(instance, heldId), 'Synaplan keeps the new path').toBe(`${moved}/${held}`)
+
+      await withoutCron(async () => {
+        expect((await dav.delete(`${DAV}/${moved}`)).ok(), `moving ${moved} to the trash`).toBe(true)
+        expect(reportOf(heldId, 'deleted'), 'the file inside, from the file cache').toEqual([
+          expect.objectContaining({ step: 'send', path: '' }),
+        ])
+        expect(reportOf(folderId, 'deleted')).toEqual([expect.objectContaining({ step: 'send', path: moved })])
+        runSourceEvents(UID)
+      })
+      expect(synaplanFilesOf(instance, heldId)[0].deletedAt, 'the file inside left Synaplan').toBeGreaterThan(0)
+      expect(await foundInFolder(synaplan, knowledge)).toEqual([])
+
+      await withoutCron(async () => {
+        await restore(dav, moved)
+        expect(reportOf(heldId, 'restored'), 'the file inside, from the file cache').toHaveLength(1)
+        runSourceEvents(UID)
+        expect(queuedEvents(UID)).toEqual([])
+      })
+      expect(synaplanFilesOf(instance, heldId), 'the same Synaplan file, back').toEqual([
+        { id: synaplanFileId, deletedAt: 0 },
+      ])
+      expect(await foundInFolder(synaplan, knowledge)).toEqual([synaplanFileId])
+    } finally {
+      await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
+      await dav.delete(`${DAV}/${moved}`)
       await dav.delete(`${DAV}/${folder}`)
       await synaplan.dispose()
       await person.dispose()

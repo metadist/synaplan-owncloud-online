@@ -26,7 +26,10 @@ use OCP\Lock\LockedException;
  * files in the order they happened, up to 100 to a call, and queues the
  * uploads of the copies kept up to date that Synaplan asks for again. Events
  * Synaplan could not take are tried again after 1, 5, 15 and 60 minutes,
- * holding back the person's events after them, and given up after that.
+ * holding back the person's events after them, and given up after that. The
+ * files of a moved folder are queued here, 500 at a time, ahead of the
+ * events after the move; those of a deleted folder wait until the deletion
+ * went through, for ten minutes at most.
  *
  * ownCloud.online cannot schedule a job for later: each person's job stays
  * in the list while their queue holds events, and a run that finds the head
@@ -42,6 +45,10 @@ class SourceEventsJob extends Job
     public const RETRY_DELAYS = [60, 300, 900, 3600];
     /** Seconds of work per run before the job leaves the rest to its next run. */
     private const BUDGET = 60;
+    /** Files of a moved folder queued per step of its walk. */
+    public const WALK_PAGE = 500;
+    /** Seconds after which the held rows of a deletion that never happened go. */
+    public const HELD_FOR = 600;
 
     private PlatformLinkService $links;
     private IJobList $jobs;
@@ -125,15 +132,49 @@ class SourceEventsJob extends Job
             if ($rows[0]['due'] > $now) {
                 return;
             }
-            $batch = $this->leadingSends($rows);
-            if ($batch === []) {
-                return;
+            $head = $rows[0];
+            if ($head['step'] === SourceEventQueue::STEP_WALK) {
+                $this->walk($head);
+            } elseif ($head['step'] === SourceEventQueue::STEP_HELD) {
+                if ($now * 1_000_000 - $head['ord'] < self::HELD_FOR * 1_000_000) {
+                    return;
+                }
+                $this->queue->removeHeld($uid, $head['walked']);
+            } elseif ($head['step'] === SourceEventQueue::STEP_SEND) {
+                $this->send($uid, $this->leadingSends($rows), $now);
+            } else {
+                $this->queue->remove([$head['seq']]);
             }
-            $this->send($uid, $batch, $now);
             if ($this->time->getTime() >= $until) {
                 return;
             }
         }
+    }
+
+    /**
+     * Queue the next page of a moved folder's files and folders, with the
+     * paths the person sees them at, behind the walk and with its order.
+     *
+     * @param QueuedEvent $walk
+     */
+    private function walk(array $walk): void
+    {
+        $page = $this->queue->descendants($walk['file_id'], $walk['walked'], self::WALK_PAGE);
+        foreach ($page as $entry) {
+            $path = $walk['path'] === '' ? '' : $walk['path'] . '/' . $entry['path'];
+            $this->queue->add($walk['uid'], [
+                'id' => (string) $entry['id'],
+                'event' => $walk['event'],
+                'version' => substr($entry['etag'], 0, 255),
+                'path' => strlen($path) <= 255 ? $path : '',
+            ], $walk['ord']);
+        }
+        if (count($page) < self::WALK_PAGE) {
+            $this->queue->remove([$walk['seq']]);
+
+            return;
+        }
+        $this->queue->walked($walk['seq'], $page[count($page) - 1]['id']);
     }
 
     /**
@@ -166,7 +207,7 @@ class SourceEventsJob extends Job
     }
 
     /**
-     * @param non-empty-list<QueuedEvent> $batch
+     * @param list<QueuedEvent> $batch
      */
     private function send(string $uid, array $batch, int $now): void
     {
