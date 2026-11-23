@@ -362,6 +362,41 @@ test.describe('the state of a file in Synaplan', () => {
     }
   })
 
+  test('the bird of a file Synaplan is taking a new version of turns searchable on the open folder', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000)
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const person = await ownCloudAs(UID)
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    const bird = page.locator(`#fileList tr[data-file="${held}"]`).getByTestId('synaplan-row-bird')
+    try {
+      await makeSearchable(person, heldId, `Settle-${stamp}`, true)
+      await withoutCron(async () => {
+        await change(dav, `${folder}/${held}`, stamp)
+        await page.goto(`/index.php/apps/files/?dir=/${folder}`)
+        await expect(bird).toHaveAttribute('data-synaplan-state', 'updating')
+        await page.evaluate(() => ((window as unknown as { stayed: boolean }).stayed = true))
+
+        runSourceEvents(UID)
+        const reuploads = queuedJobs('ReuploadJob').filter((job) => job.argument.includes(`"id":"${heldId}"`))
+        expect(reuploads, 'Synaplan asked for the new version').toHaveLength(1)
+        runJob(reuploads[0])
+      })
+
+      await expect(bird, 'the bird asks again by itself').toHaveAttribute('data-synaplan-state', 'searchable', {
+        timeout: 160_000,
+      })
+      expect(await page.evaluate(() => (window as unknown as { stayed?: boolean }).stayed), 'the same page').toBe(true)
+    } finally {
+      await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await person.dispose()
+      await dav.dispose()
+    }
+  })
+
   test('with “Keep it up to date” off a change only marks the file changed', async ({ page }) => {
     const stamp = Date.now()
     const dav = await davAs(UID)
