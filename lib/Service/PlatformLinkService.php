@@ -646,14 +646,17 @@ class PlatformLinkService
      * Tell Synaplan, with the person's own credential, that files of theirs
      * changed, moved, went to the trash or came back. Synaplan answers with
      * the copies kept up to date that it wants again; a retry is asked for
-     * when it was not reached or is busy.
+     * when it was not reached or is busy, or the person's token could not be
+     * renewed just now.
      *
      * @param list<array{id: string, event: string, version: string, path: string}> $events
      * @return array{applied: int, ignored: int, reupload: list<array{external_id: string, id: string}>, retry?: true}
      */
     public function reportSourceEvents(array $events, string $uid): array
     {
-        if ($events === [] || !$this->oauth->isRegistered() || !$this->canActFor($uid)) {
+        // Not canActFor(): it renews an expired token and says no when
+        // Synaplan cannot be reached to do so. personHeaders() renews it below.
+        if ($events === [] || !$this->oauth->isRegistered() || !$this->userAccounts->holdsCredential($uid)) {
             return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
         }
         try {

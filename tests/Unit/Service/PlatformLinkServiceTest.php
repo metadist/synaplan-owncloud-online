@@ -430,6 +430,22 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertSame($retry, $result['retry'] ?? false);
     }
 
+    public function testAChangeWaitsWhileThePersonsTokenCannotBeRenewedJustNow(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada', -60);
+        $this->http->answer(static fn (string $method, string $path): IResponse|\Throwable => $path === '/oauth/token'
+            ? new \RuntimeException('cURL error 7: Failed to connect')
+            : RecordingHttp::response(200, '{"applied":1,"ignored":0,"reupload":[]}'));
+
+        $result = $this->links()->reportSourceEvents([['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']], 'ada');
+
+        self::assertTrue($result['retry'] ?? false, 'told again once the token is renewed');
+        self::assertNotSame([], $this->http->to('/oauth/token'), 'a renewal was tried');
+        self::assertSame([], $this->http->to('/api/v1/platform-links/sources/events'));
+        self::assertTrue($this->accounts()->holdsCredential('ada'), 'the grant is still held');
+    }
+
     public function testNoChangeIsReportedWithoutARegistrationOrThePersonsCredential(): void
     {
         $event = [['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']];
