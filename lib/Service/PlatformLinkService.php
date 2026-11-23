@@ -654,10 +654,12 @@ class PlatformLinkService
      */
     public function reportSourceEvents(array $events, string $uid): array
     {
-        // Not canActFor(): it renews an expired token and says no when
-        // Synaplan cannot be reached to do so. personHeaders() renews it below.
-        if ($events === [] || !$this->oauth->isRegistered() || !$this->userAccounts->holdsCredential($uid)) {
+        if ($events === [] || !$this->oauth->isRegistered()) {
             return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+        }
+        if (!$this->canActFor($uid)) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []]
+                + ($this->userAccounts->holdsCredential($uid) ? ['retry' => true] : []);
         }
         try {
             $decoded = $this->request(

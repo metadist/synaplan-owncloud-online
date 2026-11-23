@@ -446,6 +446,21 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertTrue($this->accounts()->holdsCredential('ada'), 'the grant is still held');
     }
 
+    public function testTheChangesOfAPersonWhoseGrantHasEndedAreNotToldAgain(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada', -60);
+        $this->http->answer(static fn (string $method, string $path): IResponse => $path === '/oauth/token'
+            ? RecordingHttp::response(400, '{"error":"invalid_grant"}')
+            : RecordingHttp::response(200, '{"applied":1,"ignored":0,"reupload":[]}'));
+
+        $result = $this->links()->reportSourceEvents([['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']], 'ada');
+
+        self::assertSame(['applied' => 0, 'ignored' => 0, 'reupload' => []], $result);
+        self::assertSame([], $this->http->to('/api/v1/platform-links/sources/events'));
+        self::assertFalse($this->accounts()->holdsCredential('ada'), 'the ended grant is dropped');
+    }
+
     public function testNoChangeIsReportedWithoutARegistrationOrThePersonsCredential(): void
     {
         $event = [['id' => '7', 'event' => 'changed', 'version' => 'e', 'path' => 'a.txt']];
