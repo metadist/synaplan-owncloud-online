@@ -347,7 +347,7 @@ final class ReadScopeTest extends TestCase
 
         $this->scope()->save('ada', ReadScope::MODE_ALLOWED, $page);
 
-        self::assertSame([['id' => '3', 'path' => 'Invoices'], ['id' => '4', 'path' => 'HR']], $this->scope()->get('ada')['folders']);
+        self::assertSame([['id' => '3', 'path' => 'Archive/Invoices'], ['id' => '4', 'path' => 'HR']], $this->scope()->get('ada')['folders']);
         self::assertFalse($this->scope()->mayRead('ada', 'Invoices'));
         self::assertTrue($this->scope()->mayRead('ada', 'Archive/Invoices'));
     }
@@ -484,6 +484,37 @@ final class ReadScopeTest extends TestCase
         $expected = [['id' => '3', 'path' => 'Archive/Invoices 2026'], ['id' => '4', 'path' => 'HR']];
         self::assertSame([['mode' => ReadScope::MODE_ALLOWED, 'folders' => $expected]], $this->reports);
         self::assertSame($expected, $this->scope()->get('ada')['folders']);
+    }
+
+    public function testSavingTheSettingsPutsRightAMoveTheListenerMissed(): void
+    {
+        $this->folders = ['Invoices' => 3];
+        $this->scope()->save('ada', ReadScope::MODE_ALLOWED, [['id' => '', 'path' => 'Invoices']]);
+        $this->folders = ['Archive/Invoices' => 3];
+        $this->reports = [];
+
+        $this->scope()->save('ada', ReadScope::MODE_ALLOWED, [['id' => '3', 'path' => 'Invoices']]);
+
+        $expected = [['id' => '3', 'path' => 'Archive/Invoices']];
+        self::assertSame([['mode' => ReadScope::MODE_ALLOWED, 'folders' => $expected]], $this->reports);
+        self::assertSame($expected, $this->scope()->get('ada')['folders']);
+    }
+
+    public function testTheHourlyRepublishSendsEachFolderWhereItIsNow(): void
+    {
+        $this->folders = ['Invoices' => 3, 'HR' => 4];
+        $this->scope()->save('ada', ReadScope::MODE_ALLOWED, [['id' => '', 'path' => 'Invoices'], ['id' => '', 'path' => 'HR']]);
+        $saved = $this->config->userValue('ada', ReadScope::PREF);
+        $this->folders = ['Archive/Invoices' => 3, 'HR' => 4];
+        $this->reports = [];
+
+        self::assertTrue($this->scope()->republish('ada'));
+
+        self::assertSame([[
+            'mode' => ReadScope::MODE_ALLOWED,
+            'folders' => [['id' => '3', 'path' => 'Archive/Invoices'], ['id' => '4', 'path' => 'HR']],
+        ]], $this->reports);
+        self::assertSame($saved, $this->config->userValue('ada', ReadScope::PREF), 'without the ceiling lock it saves nothing');
     }
 
     public function testNothingIsReportedWhenNoAllowedFolderMoved(): void

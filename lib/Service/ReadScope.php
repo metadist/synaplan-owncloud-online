@@ -146,12 +146,7 @@ class ReadScope
         $before = $scope;
         // A folder that moved is listed where it is now, never under the
         // name a new folder took.
-        foreach ($scope['folders'] as $i => $folder) {
-            $now = $folder['id'] !== '' ? $this->currentPath($uid, $folder) : null;
-            if ($now !== null) {
-                $scope['folders'][$i]['path'] = $now;
-            }
-        }
+        $scope['folders'] = $this->withCurrentPaths($uid, $scope['folders']);
         $id = $this->idAt($uid, $path);
         $at = $this->entryFor($uid, $scope['folders'], $id, $path);
         if ($at === null) {
@@ -209,8 +204,8 @@ class ReadScope
 
     /**
      * A folder the person kept stays the folder it was saved as, found or
-     * not, whatever now sits at its path; a folder added here is the one at
-     * its path now. An id the request carries only says which saved folder
+     * not, whatever now sits at its path, and is saved where it is now; a
+     * folder added here is the one at its path now. An id the request carries only says which saved folder
      * it keeps.
      *
      * @param list<array{id: string, path: string}> $folders
@@ -228,6 +223,7 @@ class ReadScope
                 continue;
             }
             $entry = self::savedEntry($saved, $folder['id'], $path) ?? ['id' => $this->idAt($uid, $path), 'path' => $path];
+            [$entry] = $this->withCurrentPaths($uid, [$entry]);
             if (in_array($entry, $kept, true)) {
                 continue;
             }
@@ -332,6 +328,12 @@ class ReadScope
      * then. So this holds only the person's lock, and a ceiling change that
      * narrowed the choice while it was sent leaves it pending.
      *
+     * Each folder goes out where it is now, as a move the listener missed
+     * would otherwise keep its old path in Synaplan. Without the ceiling
+     * lock this cannot save those paths, as that would write over a choice
+     * a ceiling change narrowed meanwhile; the next change of the person's
+     * own, or the next move, saves them.
+     *
      * @throws LockedException when another change of theirs keeps running
      */
     public function republish(string $uid): bool
@@ -342,7 +344,10 @@ class ReadScope
     private function republishNow(string $uid): bool
     {
         $sent = $this->savedChoice($uid);
-        if (!$this->report($uid, $this->get($uid))) {
+        $this->resolved = [];
+        $scope = $this->get($uid);
+        $scope['folders'] = $this->withCurrentPaths($uid, $scope['folders']);
+        if (!$this->report($uid, $scope)) {
             return false;
         }
         $this->config->deleteUserValue($uid, Application::APP_ID, self::PENDING);
@@ -373,25 +378,29 @@ class ReadScope
     private function followNow(string $uid): bool
     {
         $scope = $this->get($uid);
-        if ($scope['folders'] === []) {
+        $folders = $this->withCurrentPaths($uid, $scope['folders']);
+        if ($folders === $scope['folders']) {
             return false;
         }
-        $moved = false;
-        foreach ($scope['folders'] as $i => $folder) {
-            if ($folder['id'] === '') {
-                continue;
-            }
-            $path = $this->currentPath($uid, $folder);
-            if ($path !== null && $path !== $folder['path']) {
-                $scope['folders'][$i]['path'] = $path;
-                $moved = true;
-            }
-        }
-        if ($moved) {
-            $this->store($uid, $scope);
-        }
+        $scope['folders'] = $folders;
+        $this->store($uid, $scope);
 
-        return $moved;
+        return true;
+    }
+
+    /**
+     * Each folder where it is now; one that cannot be found (deleted, in
+     * the trash) keeps its saved path.
+     *
+     * @param list<array{id: string, path: string}> $folders
+     * @return list<array{id: string, path: string}>
+     */
+    private function withCurrentPaths(string $uid, array $folders): array
+    {
+        return array_map(
+            fn (array $folder): array => ['id' => $folder['id'], 'path' => $this->currentPath($uid, $folder) ?? $folder['path']],
+            $folders,
+        );
     }
 
     /**
