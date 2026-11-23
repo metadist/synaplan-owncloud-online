@@ -15,6 +15,7 @@ import {
   ownCloudAs,
   type QueuedEvent,
   queuedEvents,
+  type QueuedJob,
   queuedJobs,
   runJob,
   runSourceEvents,
@@ -26,6 +27,7 @@ import {
   synaplanFilesOf,
   synaplanPathOf,
   withoutCron,
+  withSynaplanUnreachable,
 } from './support'
 
 /**
@@ -308,6 +310,50 @@ test.describe('the state of a file in Synaplan', () => {
         .poll(async () => (await detailOf(person, heldId)).state, { timeout: 90_000, intervals: [1_000] })
         .toBe('searchable')
       expect((await detailOf(person, heldId)).synaplanFileId, 'the same Synaplan file').toBe(before.synaplanFileId)
+    } finally {
+      await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
+      await dav.delete(`${DAV}/${folder}`)
+      await person.dispose()
+      await dav.dispose()
+    }
+  })
+
+  test('a re-upload that fails while Synaplan cannot be reached is tried again a minute later', async () => {
+    test.setTimeout(240_000)
+    const stamp = Date.now()
+    const dav = await davAs(UID)
+    const person = await ownCloudAs(UID)
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    const reuploads = (): QueuedJob[] =>
+      queuedJobs('ReuploadJob').filter((job) => job.argument.includes(`"id":"${heldId}"`))
+    try {
+      await makeSearchable(person, heldId, `Retry-${stamp}`, true)
+      await withoutCron(async () => {
+        await change(dav, `${folder}/${held}`, stamp)
+        runSourceEvents(UID)
+        const [asked] = reuploads()
+        expect(asked, 'Synaplan asked for the new version').toBeDefined()
+
+        const failedAt = Math.floor(Date.now() / 1000)
+        await withSynaplanUnreachable(async () => runJob(asked))
+        const waiting = reuploads()
+        expect(waiting, 'one retry in place of the job').toHaveLength(1)
+        const { attempt, due } = JSON.parse(waiting[0].argument) as { attempt: number; due: number }
+        expect(attempt).toBe(1)
+        expect(due - failedAt, 'a minute later').toBeGreaterThanOrEqual(60)
+        expect(due - failedAt).toBeLessThanOrEqual(65)
+
+        runJob(waiting[0])
+        expect(reuploads(), 'not before it is due').toEqual(waiting)
+        expect((await detailOf(person, heldId)).state).toBe('updating')
+
+        await new Promise((resolve) => setTimeout(resolve, due * 1000 - Date.now() + 1_000))
+        runJob(waiting[0])
+        expect(reuploads(), 'done, it leaves the list').toEqual([])
+      })
+      await expect
+        .poll(async () => (await detailOf(person, heldId)).state, { timeout: 90_000, intervals: [1_000] })
+        .toBe('searchable')
     } finally {
       await person.delete(`${APP}/api/v1/knowledge/${heldId}`)
       await dav.delete(`${DAV}/${folder}`)

@@ -522,6 +522,34 @@ export function runSourceEvents(uid: string): void {
   runJob(job)
 }
 
+/**
+ * Run `act` while the app sends what it asks of Synaplan to a closed port,
+ * as when Synaplan cannot be reached, and give the app its address back.
+ */
+export async function withSynaplanUnreachable<T>(act: () => Promise<T>): Promise<T> {
+  const keys = ['synaplan_url', 'synaplan_url_local']
+  // occ can print notices before its answer, such as one about PCNTL.
+  const listed = occ('config:list', 'oco_synaplan')
+  const settings = (JSON.parse(listed.slice(listed.indexOf('{'))) as { apps?: Record<string, Record<string, unknown>> })
+    .apps?.oco_synaplan
+  const saved = keys.map((key) => (typeof settings?.[key] === 'string' ? (settings[key] as string) : null))
+  for (const key of keys) {
+    occ('config:app:set', 'oco_synaplan', key, '--value', 'http://127.0.0.1:9')
+  }
+  try {
+    return await act()
+  } finally {
+    keys.forEach((key, i) => {
+      const value = saved[i]
+      if (value === null) {
+        occ('config:app:delete', 'oco_synaplan', key)
+      } else {
+        occ('config:app:set', 'oco_synaplan', key, '--value', value)
+      }
+    })
+  }
+}
+
 /** One Synaplan file made of an ownCloud.online file; `deletedAt` is 0 until Synaplan heard it went to the trash. */
 export interface SynaplanFileRow {
   id: number
