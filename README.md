@@ -197,8 +197,9 @@ longer than Synaplan's 255 bytes is sent empty, and Synaplan keeps the name it
 has. When Synaplan keeps the file up to date, it
 asks for the new version, and another background job uploads it with that
 person's credential, in place of Synaplan's copy. An upload that fails for
-now, because Synaplan cannot be reached or is busy, or the person's access
-cannot be renewed just then, is tried again after 1, 5, 15 and 60 minutes.
+now, because Synaplan cannot be reached, is busy or sends an answer that
+cannot be read, or the person's access cannot be renewed just then, is tried
+again after 1, 5, 15 and 60 minutes.
 A file in the trash leaves
 the AI's search; restored, it comes back as the same file in Synaplan.
 

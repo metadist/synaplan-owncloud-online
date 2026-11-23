@@ -5,13 +5,18 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\BackgroundJob;
 
 use OCA\OcoSynaplan\BackgroundJob\ReuploadJob;
+use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Http\Failure;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
+use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
+use OCP\AppFramework\Http;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
+use OCP\Http\Client\IResponse;
 use OCP\ILogger;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -155,7 +160,7 @@ final class ReuploadJobTest extends TestCase
     }
 
     /**
-     * @return iterable<string, array{\Throwable, bool}>
+     * @return iterable<string, array{\Throwable|IResponse, bool}>
      */
     public static function uploadFailures(): iterable
     {
@@ -164,14 +169,19 @@ final class ReuploadJobTest extends TestCase
         yield 'failing' => [new \RuntimeException('Bad Gateway', 502), true];
         yield 'file refused' => [new \RuntimeException('Payload Too Large', 413), false];
         yield 'key refused' => [new \RuntimeException('Unauthorized', 401), false];
+        yield 'answer unreadable' => [RecordingHttp::response(200, '<html>Bad Gateway</html>'), true];
+        yield 'key refused for a provisioned account' => [
+            new FailureException(new Failure(Http::STATUS_BAD_GATEWAY, Failure::SYNAPLAN_ERROR), 'Synaplan refused the key'),
+            false,
+        ];
     }
 
     #[DataProvider('uploadFailures')]
-    public function testAnUploadThatFailsForNowIsTriedAgain(\Throwable $failure, bool $again): void
+    public function testAnUploadThatFailsForNowIsTriedAgain(\Throwable|IResponse $failure, bool $again): void
     {
         $this->register();
         $this->connect('ada', 'access-ada');
-        $this->http->answer(fn (string $method, string $path): array|\Throwable => match ($path) {
+        $this->http->answer(fn (string $method, string $path): array|\Throwable|IResponse => match ($path) {
             '/api/v1/cloud/status' => ['items' => [$this->state]],
             '/api/v1/files/upload' => $failure,
             default => ['success' => true],
@@ -180,6 +190,7 @@ final class ReuploadJobTest extends TestCase
         $this->runReuploadJob(['uid' => 'ada', 'id' => '7']);
 
         self::assertSame($again ? [['uid' => 'ada', 'id' => '7', 'attempt' => 1, 'due' => 1_060]] : [], $this->retries());
+        self::assertCount(1, $this->http->to('/api/v1/files/upload'));
     }
 
     public function testTheLastRetryIsTheLast(): void
