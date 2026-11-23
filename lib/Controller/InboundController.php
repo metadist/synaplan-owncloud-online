@@ -13,6 +13,7 @@ namespace OCA\OcoSynaplan\Controller;
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Service\CopyDelivery;
+use OCA\OcoSynaplan\Service\FolderRead;
 use OCA\OcoSynaplan\Service\NotificationSignature;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
@@ -43,6 +44,7 @@ class InboundController extends Controller
         private NotifyKeyCache $keys,
         private SeenNotificationStore $seen,
         private CopyDelivery $copies,
+        private FolderRead $reads,
         private PlatformLinkService $links,
         private UserAccountService $accounts,
         private ICacheFactory $cacheFactory,
@@ -72,16 +74,17 @@ class InboundController extends Controller
         $notification = NotificationSignature::claims($token);
         $type = (string) $notification['type'];
         $id = (string) $notification['id'];
-        // A copy is done for the person the signed notice names, with that
-        // person's own credential. Without one nobody here may act, and
-        // Synaplan is told so before anything is claimed.
+        // A copy or a folder read is done for the person the signed notice
+        // names, with that person's own credential. Without one nobody here
+        // may act, and Synaplan is told so before anything is claimed.
         $person = is_string($notification['sub'] ?? null) ? $notification['sub'] : '';
-        if ($type === 'delivery' && !$this->links->canActFor($person)) {
+        if (in_array($type, ['delivery', 'pickup'], true) && !$this->links->canActFor($person)) {
             return new JSONResponse(['error' => 'not_linked'], Http::STATUS_CONFLICT);
         }
 
         return match ($type) {
             'delivery' => $this->delivered($this->copies->handle($id, $person)),
+            'pickup' => $this->read($id, $person),
             'identity_revoked' => $this->revoked($person),
             default => new JSONResponse([], Http::STATUS_NO_CONTENT),
         };
@@ -139,6 +142,17 @@ class InboundController extends Controller
             : Http::STATUS_OK;
 
         return new JSONResponse($result['body'], $status);
+    }
+
+    /**
+     * The read answers Synaplan with its result call; this answer only says
+     * the notice was taken.
+     */
+    private function read(string $id, string $person): JSONResponse
+    {
+        $this->reads->handle($id, $person);
+
+        return new JSONResponse(['state' => 'accepted'], Http::STATUS_ACCEPTED);
     }
 
     private function revoked(string $person): JSONResponse

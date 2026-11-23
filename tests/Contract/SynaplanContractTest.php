@@ -41,7 +41,8 @@ final class SynaplanContractTest extends TestCase
     /**
      * Calls made with a person's credential that contract v1 (the vendored
      * paths.json) does not list yet. All answer on the pinned Synaplan; the
-     * files and delivery routes with the `files` scope (ApiKeyScope).
+     * files, delivery, pickup and read-scope routes with the `files` scope
+     * (ApiKeyScope).
      */
     private const OUTSIDE_THE_CONTRACT = [
         'DELETE /api/v1/apikeys/{id}',
@@ -51,6 +52,11 @@ final class SynaplanContractTest extends TestCase
         'GET /api/v1/platform-links/deliveries/{id}/file',
         'POST /api/v1/platform-links/deliveries/{id}/claim',
         'POST /api/v1/platform-links/deliveries/{id}/result',
+        'POST /api/v1/platform-links/pickups/{id}/claim',
+        'POST /api/v1/platform-links/pickups/{id}/files',
+        'POST /api/v1/platform-links/pickups/{id}/listing',
+        'POST /api/v1/platform-links/pickups/{id}/result',
+        'PUT /api/v1/platform-links/read-scope',
     ];
 
     private const CALLBACK = 'http://localhost:8083/apps/oco_synaplan/public/link-return.html';
@@ -184,6 +190,11 @@ final class SynaplanContractTest extends TestCase
         self::assertNotEmpty($translations, 'callEverything() must exercise the translation mode.');
     }
 
+    public function testSynaplansConfigurationAlwaysSaysWhatItOffers(): void
+    {
+        self::assertContains('capabilities', $this->contract()->answerRequires('GET', '/.well-known/synaplan-configuration'));
+    }
+
     public function testNestedItemFieldsAreChecked(): void
     {
         $contract = $this->contract();
@@ -289,6 +300,24 @@ final class SynaplanContractTest extends TestCase
                 'open_url' => 'http://localhost:8083/index.php/f/9',
             ]),
             fn () => $links->reportDelivery('18', 'ada', ['status' => 'failed', 'error_code' => 'quota_exceeded']),
+            fn () => $links->claimPickup('15', 'ada'),
+            fn () => $links->submitPickupListing('15', 'ada', [[
+                'id' => '7',
+                'version' => 'etag-1',
+                'name' => 'notes.txt',
+                'folder' => 'Invoices',
+                'size' => 12,
+                'mime' => 'text/plain',
+            ]]),
+            fn () => $links->uploadPickupFile('15', 'ada', '7', 'etag-1', 'hello', 'notes.txt', 'text/plain'),
+            fn () => $links->reportPickupResult('15', 'ada', [
+                'status' => 'partial',
+                'listed' => 2,
+                'sent' => 1,
+                'skipped' => [['id' => '8', 'name' => 'old.txt', 'reason' => 'changed_since_listing']],
+            ]),
+            fn () => $links->reportPickupResult('16', 'ada', ['status' => 'failed', 'error_code' => 'outside_scope']),
+            fn () => $links->reportReadScope('ada', 'allowed', [['id' => '3', 'path' => 'Invoices']]),
             fn () => $accounts->fetchUsage(7),
             fn () => $accounts->adoptLegacyAccount('ada'),
             fn () => $accounts->renewProvisionedKey(),

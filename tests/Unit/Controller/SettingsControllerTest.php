@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\SettingsController;
+use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\FakeCrypto;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
@@ -84,7 +85,7 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(1, $put);
         self::assertSame('https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound', $put[0]['body']['delivery_url']);
-        self::assertSame(['deliveries'], $put[0]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[0]['body']['app_capabilities']);
         self::assertSame(
             'https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound',
             $this->controller()->getSettings()->getData()['delivery_url'],
@@ -114,7 +115,7 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(2, $put);
         self::assertArrayNotHasKey('delivery_url', $put[1]['body']);
-        self::assertSame(['deliveries'], $put[1]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[1]['body']['app_capabilities']);
     }
 
     public function testRegisteringReadsTheNotificationKeys(): void
@@ -163,6 +164,47 @@ final class SettingsControllerTest extends TestCase
         self::assertFalse($this->synaplanConfig()->isRegistered());
     }
 
+    public function testLoweringTheReadCeilingNarrowsEveryoneAboveItAndRaisingItWidensNobody(): void
+    {
+        $this->config->setUserValue('ada', 'oco_synaplan', ReadScope::PREF, '{"mode":"all","folders":[]}');
+        $this->config->setUserValue('bob', 'oco_synaplan', ReadScope::PREF, '{"mode":"allowed","folders":[{"id":"","path":"Invoices"}]}');
+        $this->config->setUserValue('eve', 'oco_synaplan', ReadScope::PREF, '{"mode":"watched","folders":[]}');
+
+        $this->controller()->saveSettings(read_scope_ceiling: ReadScope::MODE_WATCHED);
+
+        self::assertSame(ReadScope::MODE_WATCHED, $this->controller()->getSettings()->getData()['read_scope_ceiling']);
+        foreach (['ada', 'bob'] as $uid) {
+            self::assertSame(ReadScope::MODE_WATCHED, $this->saved($uid)['mode'], $uid);
+            self::assertSame('1', $this->config->userValue($uid, ReadScope::PENDING), $uid . ' is told Synaplan within the hour');
+        }
+        self::assertSame([['id' => '', 'path' => 'Invoices']], $this->saved('bob')['folders'], 'the named folders stay');
+        self::assertNull($this->config->userValue('eve', ReadScope::PENDING));
+        self::assertSame([], $this->http->calls, 'the hourly job tells Synaplan, not the save');
+
+        $this->controller()->saveSettings(read_scope_ceiling: ReadScope::MODE_ALL);
+
+        self::assertSame(ReadScope::MODE_WATCHED, $this->readScope()->get('ada')['mode']);
+        self::assertSame(ReadScope::MODE_WATCHED, $this->readScope()->get('bob')['mode']);
+    }
+
+    public function testAnUnknownReadCeilingIsNotSaved(): void
+    {
+        $this->controller()->saveSettings(read_scope_ceiling: 'everything');
+
+        self::assertSame(ReadScope::MODE_ALLOWED, $this->controller()->getSettings()->getData()['read_scope_ceiling']);
+    }
+
+    public function testTheFolderCountOnePersonMayAllowStaysBetweenOneAndFiveHundred(): void
+    {
+        self::assertSame(20, $this->controller()->getSettings()->getData()['read_folder_cap']);
+
+        foreach ([0 => 1, 9000 => 500, 5 => 5] as $asked => $kept) {
+            $this->controller()->saveSettings(read_folder_cap: $asked);
+
+            self::assertSame($kept, $this->controller()->getSettings()->getData()['read_folder_cap'], (string) $asked);
+        }
+    }
+
     public function testLeavingSynaplan(): void
     {
         $this->register();
@@ -180,6 +222,17 @@ final class SettingsControllerTest extends TestCase
         $request = $this->createStub(IRequest::class);
         $request->method('getParam')->willReturnCallback(static fn (string $key, mixed $default = null): mixed => $params[$key] ?? $default);
 
-        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), $this->notifyKeys(), $this->logger());
+        return new SettingsController($request, $this->config, $this->client(), $this->synaplanConfig(), $this->keys(), $this->links(), $this->notifyKeys(), $this->logger(), $this->readScope());
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function saved(string $uid): array
+    {
+        $saved = json_decode((string) $this->config->userValue($uid, ReadScope::PREF), true);
+        self::assertIsArray($saved);
+
+        return $saved;
     }
 }

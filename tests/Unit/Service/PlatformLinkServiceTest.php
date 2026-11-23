@@ -11,6 +11,7 @@ use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
 use OCP\Http\Client\IResponse;
 use OCP\IURLGenerator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class PlatformLinkServiceTest extends TestCase
@@ -203,7 +204,7 @@ final class PlatformLinkServiceTest extends TestCase
     {
         $urls = $this->createStub(IURLGenerator::class);
         $urls->method('linkToRouteAbsolute')->willReturn('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound');
-        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger());
+        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger(), $this->cache);
 
         self::assertSame('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound', $links->defaultDeliveryUrl());
         self::assertSame('http://localhost:8083/index.php/apps/oco_synaplan/api/v1/inbound', $links->deliveryUrl());
@@ -216,7 +217,7 @@ final class PlatformLinkServiceTest extends TestCase
             static fn (string $route, array $parameters): string => $route === 'files.viewcontroller.showFile' ? '/cloud/index.php/f/' . $parameters['fileId'] : '',
         );
         $urls->method('getAbsoluteURL')->willReturnCallback(static fn (string $path): string => 'http://host.docker.internal:8083' . $path);
-        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger());
+        $links = new PlatformLinkService($this->http, $this->config, $urls, $this->oauth(), $this->appManager(), $this->synaplanConfig(), $this->accounts(), $this->logger(), $this->cache);
 
         self::assertSame('http://host.docker.internal:8083/cloud/index.php/f/42', $links->openUrl(42), 'without overwrite.cli.url only the request tells');
 
@@ -265,6 +266,60 @@ final class PlatformLinkServiceTest extends TestCase
         );
     }
 
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: bool}>
+     */
+    public static function configurations(): array
+    {
+        return [
+            'folder reads and the read setting' => [['capabilities' => ['deliveries', 'pickups', 'read_scope']], true],
+            'no read setting' => [['capabilities' => ['deliveries', 'pickups']], false],
+            'no folder reads' => [['capabilities' => ['deliveries', 'read_scope']], false],
+            'a configuration without capabilities' => [[], false],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $offers
+     */
+    #[DataProvider('configurations')]
+    public function testSynaplanReadsFoldersOnlyWhenItOffersFolderReadsAndTheReadSetting(array $offers, bool $reads): void
+    {
+        $this->http->answer(static fn (): array => ['issuer' => self::SYNAPLAN] + $offers);
+
+        self::assertSame([$reads, $reads], [$this->links()->readsFolders(), $this->links()->readsFolders()]);
+        self::assertCount(1, $this->http->to('/.well-known/synaplan-configuration'), 'kept as long as Synaplan lets it be kept');
+        self::assertSame(10, $this->http->calls[0]['options']['timeout']);
+        self::assertSame([300], $this->keptFor());
+    }
+
+    public function testASynaplanWithPlatformLinksOffReadsNoFolders(): void
+    {
+        $this->http->answer(static fn (): IResponse => RecordingHttp::response(404, '{"error":"not_found"}'));
+
+        self::assertFalse($this->links()->readsFolders());
+        self::assertSame([300], $this->keptFor());
+    }
+
+    public function testASynaplanThatDoesNotAnswerReadsNoFoldersAndIsAskedAgainSoon(): void
+    {
+        foreach ([
+            'down' => static fn (): IResponse => RecordingHttp::response(503, ''),
+            'unreachable' => static fn (): \Throwable => new \RuntimeException('cURL error 28: Operation timed out'),
+        ] as $case => $responder) {
+            $this->cache->values = [];
+            $this->cache->ttls = [];
+            $this->http->answer($responder);
+
+            self::assertFalse($this->links()->readsFolders(), $case);
+            self::assertSame([60], $this->keptFor(), $case);
+        }
+
+        $this->cache->values = [];
+        $this->http->answer(static fn (): array => ['issuer' => self::SYNAPLAN, 'capabilities' => ['pickups', 'read_scope']]);
+        self::assertTrue($this->links()->readsFolders(), 'asked again once the answer is gone');
+    }
+
     public function testLeavingSynaplanEndsTheRegistrationThereAndForgetsTheKeyHere(): void
     {
         $this->register();
@@ -275,5 +330,13 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertFalse($this->oauth()->isRegistered());
         self::assertNull($this->config->appValue('oauth_private_key'));
         self::assertNull($this->config->appValue('notify_issuer'));
+    }
+
+    /**
+     * @return list<int> how long each cached answer is kept
+     */
+    private function keptFor(): array
+    {
+        return array_values($this->cache->ttls);
     }
 }

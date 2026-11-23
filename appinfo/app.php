@@ -13,10 +13,12 @@ declare(strict_types=1);
  */
 
 use OCA\OcoSynaplan\AppInfo\Application;
+use OCA\OcoSynaplan\Listener\ReadScopeListener;
 use OCA\OcoSynaplan\Listener\UserDeletedListener;
 use OCA\OcoSynaplan\Listener\UserEnabledListener;
 use OCA\OcoSynaplan\Notification\CopyNotifier;
 use OCA\OcoSynaplan\Service\Notices;
+use OCP\Files\Node;
 use OCP\IUser;
 use OCP\Util;
 use Symfony\Component\EventDispatcher\GenericEvent;
@@ -34,8 +36,10 @@ $dispatcher->addListener('OCA\Files::loadAdditionalScripts', function () {
 });
 
 // The chat launcher is on every page a signed-in person opens, and so are
-// the notices of copies saved while the person was away.
-$signedIn = \OC::$CLI ? null : \OC::$server->getUserSession()->getUser();
+// the notices of copies saved while the person was away. WebDAV requests
+// load this file too and render no page.
+$page = !\OC::$CLI && \basename(\OC::$server->getRequest()->getScriptName()) === 'index.php';
+$signedIn = $page ? \OC::$server->getUserSession()->getUser() : null;
 if ($signedIn !== null) {
     Util::addTranslations(Application::APP_ID);
     Util::addScript(Application::APP_ID, 'chat-launcher');
@@ -55,6 +59,15 @@ if ($signedIn !== null) {
     /** @var UserDeletedListener $listener */
     $listener = $container->query(UserDeletedListener::class);
     $listener->handle($user);
+});
+// A folder Synaplan may read keeps that permission when it moves; Synaplan
+// hears its new path.
+\OC::$server->getRootFolder()->listen('\OC\Files', 'postRename', function ($source, $target) use ($container) {
+    if ($target instanceof Node) {
+        /** @var ReadScopeListener $listener */
+        $listener = $container->query(ReadScopeListener::class);
+        $listener->handle($target);
+    }
 });
 $dispatcher->addListener('OC\User\User::postSetEnabled', function ($event) use ($container) {
     $user = $event instanceof GenericEvent ? $event->getSubject() : null;

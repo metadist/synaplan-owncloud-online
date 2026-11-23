@@ -15,6 +15,7 @@ use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\PlatformLinkException;
 use OCP\App\IAppManager;
 use OCP\Http\Client\IClientService;
+use OCP\ICacheFactory;
 use OCP\IConfig;
 use OCP\ILogger;
 use OCP\IURLGenerator;
@@ -35,10 +36,15 @@ class PlatformLinkService
      * built here: Synaplan offers a feature to a person only when the app
      * says it has it.
      */
-    public const CAPABILITIES = ['deliveries'];
+    public const CAPABILITIES = ['deliveries', 'pickups', 'read_scope'];
     private const REGISTRATION_STATUS = 'link_registration_status';
     /** A copy may be 100 MB; its one-time download path is valid this long. */
     private const DOWNLOAD_TIMEOUT = 300;
+    private const CALL_TIMEOUT = 30;
+    private const OFFERS_TIMEOUT = 10;
+    /** As long as Synaplan lets its configuration be kept. */
+    private const OFFERS_TTL = 300;
+    private const OFFERS_RETRY_TTL = 60;
     /** Synaplan no longer accepts this registration; its own statuses are pending and active. */
     public const STATUS_REFUSED = 'refused';
 
@@ -51,6 +57,7 @@ class PlatformLinkService
         private SynaplanConfig $synaplanConfig,
         private UserAccountService $userAccounts,
         private ILogger $logger,
+        private ICacheFactory $cacheFactory,
     ) {
     }
 
@@ -238,6 +245,46 @@ class PlatformLinkService
     }
 
     /**
+     * Whether this Synaplan reads folders: its configuration offers both
+     * folder reads and the read setting. With platform links off, or with no
+     * answer, it offers neither; no answer is asked again after a minute.
+     */
+    public function readsFolders(): bool
+    {
+        $cache = $this->cacheFactory->create(Application::APP_ID);
+        $key = 'offered/' . md5($this->synaplanConfig->getBaseUrl());
+        $cached = $cache->get($key);
+        if ($cached === '1' || $cached === '0') {
+            return $cached === '1';
+        }
+        $answered = false;
+        $offered = false;
+        try {
+            $configuration = $this->request(
+                'GET',
+                '/.well-known/synaplan-configuration',
+                null,
+                ['Accept' => 'application/json'],
+                false,
+                true,
+                self::OFFERS_TIMEOUT,
+            );
+            $status = (int) ($configuration['status_code'] ?? 200);
+            $answered = $status === 200 || $status === 404;
+            $capabilities = $status === 200 && is_array($configuration['capabilities'] ?? null) ? $configuration['capabilities'] : [];
+            $offered = in_array('pickups', $capabilities, true) && in_array('read_scope', $capabilities, true);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Synaplan\'s configuration could not be read: {message}', [
+                'app' => Application::APP_ID,
+                'message' => $e->getMessage(),
+            ]);
+        }
+        $cache->set($key, $offered ? '1' : '0', $answered ? self::OFFERS_TTL : self::OFFERS_RETRY_TTL);
+
+        return $offered;
+    }
+
+    /**
      * Claim a copy Synaplan announced, with the person's own credential. A
      * refusal comes back with its `status_code`.
      *
@@ -310,6 +357,118 @@ class PlatformLinkService
             false,
             true,
         );
+    }
+
+    /**
+     * Claim a folder read Synaplan announced, with the person's own
+     * credential. A refusal comes back with its `status_code`.
+     *
+     * @return array<string, mixed>
+     */
+    public function claimPickup(string $id, string $uid, int $timeoutSeconds = self::CALL_TIMEOUT): array
+    {
+        return $this->request(
+            'POST',
+            '/api/v1/platform-links/pickups/' . rawurlencode($id) . '/claim',
+            null,
+            $this->personHeaders($uid),
+            false,
+            true,
+            $timeoutSeconds,
+        );
+    }
+
+    /**
+     * What the folder holds; Synaplan answers which files to send.
+     *
+     * @param list<array<string, mixed>> $items at most 500
+     * @return array<string, mixed>
+     */
+    public function submitPickupListing(string $id, string $uid, array $items, int $timeoutSeconds = self::CALL_TIMEOUT): array
+    {
+        return $this->request(
+            'POST',
+            '/api/v1/platform-links/pickups/' . rawurlencode($id) . '/listing',
+            ['items' => $items],
+            array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
+            false,
+            true,
+            $timeoutSeconds,
+        );
+    }
+
+    /**
+     * Send one listed file. The answer carries its `status_code`; a refusal
+     * names its reason in `error`.
+     *
+     * @return array<string, mixed>
+     */
+    public function uploadPickupFile(
+        string $id,
+        string $uid,
+        string $remoteId,
+        string $version,
+        string $bytes,
+        string $name,
+        string $mime,
+        int $timeoutSeconds = 120,
+    ): array {
+        $response = $this->clientService->newClient()->post(
+            $this->synaplanConfig->getBaseUrl() . '/api/v1/platform-links/pickups/' . rawurlencode($id) . '/files',
+            [
+                'headers' => $this->personHeaders($uid),
+                'multipart' => [
+                    ['name' => 'id', 'contents' => $remoteId],
+                    ['name' => 'version', 'contents' => $version],
+                    ['name' => 'file', 'contents' => $bytes, 'filename' => $name, 'headers' => ['Content-Type' => $mime]],
+                ],
+                'timeout' => max(1, $timeoutSeconds),
+                'http_errors' => false,
+            ],
+        );
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        return ['status_code' => (int) $response->getStatusCode()] + (is_array($decoded) ? $decoded : []);
+    }
+
+    /**
+     * Tell Synaplan how a folder read ended: `done`, `partial` or `failed`.
+     *
+     * @param array<string, mixed> $result
+     */
+    public function reportPickupResult(string $id, string $uid, array $result): void
+    {
+        $this->request(
+            'POST',
+            '/api/v1/platform-links/pickups/' . rawurlencode($id) . '/result',
+            $result,
+            array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
+            false,
+            true,
+        );
+    }
+
+    /**
+     * True when Synaplan took the setting. Its copy is what a run checks
+     * before asking, so a false answer has to be retried, not dropped.
+     *
+     * @param list<array{id: string, path: string}> $folders
+     */
+    public function reportReadScope(string $uid, string $mode, array $folders): bool
+    {
+        if (!$this->canActFor($uid)) {
+            return false;
+        }
+        $result = $this->request(
+            'PUT',
+            '/api/v1/platform-links/read-scope',
+            ['external_id' => $uid, 'mode' => $mode, 'folders' => $folders],
+            array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
+            false,
+            true,
+        );
+
+        return !isset($result['status_code']) || (int) $result['status_code'] === 200;
     }
 
     /**
@@ -488,13 +647,20 @@ class PlatformLinkService
      *                         with `status_code` set, so a refused claim can be told apart
      * @return array<string, mixed>
      */
-    private function request(string $method, string $path, ?array $body, array $headers, bool $notFoundOk = false, bool $keepErrors = false): array
-    {
+    private function request(
+        string $method,
+        string $path,
+        ?array $body,
+        array $headers,
+        bool $notFoundOk = false,
+        bool $keepErrors = false,
+        int $timeoutSeconds = self::CALL_TIMEOUT,
+    ): array {
         $client = $this->clientService->newClient();
         $url = $this->synaplanConfig->getBaseUrl() . $path;
         $options = [
             'headers' => $headers,
-            'timeout' => 30,
+            'timeout' => max(1, $timeoutSeconds),
             'http_errors' => false,
         ];
         if ($body !== null) {

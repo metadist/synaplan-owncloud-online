@@ -24,6 +24,11 @@ talks to the **Synaplan backend API**.
   with a link to the file.
 - **New → From Synaplan…** in Files adds files from Synaplan, the ones it made
   first, to the open folder.
+- **Folders Synaplan reads** — a task in Synaplan can read the files of a
+  folder. Each person chooses what it may read under Settings → Personal →
+  Synaplan (*Only what I watch*, *Also folders I allow* or *All my files*),
+  and **Let Synaplan read this folder** in a folder's menu in Files adds it
+  to their folders.
 - **Configurable answer language** — set a default and optionally follow each
   user's ownCloud.online interface language.
 - **How people use Synaplan** — the administrator picks one of the modes the
@@ -119,6 +124,32 @@ published keys, which an hourly background job refreshes, and ignores a
 notice that is not for this server or was already seen. A person whose
 connection ended in Synaplan is asked to connect again on their next action.
 
+### Folders Synaplan reads
+
+**Synaplan may read at most** sets how far people may go: *Watched folders*,
+*Folders people allow* (the default) or *All their files*. Personal settings
+offer only the choices up to it. Lowering it narrows everyone who chose more
+at once on this server; Synaplan hears of it from the hourly background job,
+and until then this server refuses the reads Synaplan still asks for.
+Raising it widens nobody. **Folders one person may allow** caps the folders
+one person names (1 to 500, default 20).
+
+The personal setting and **Let Synaplan read this folder** appear only while
+Synaplan offers folder reads, that is while its
+`/.well-known/synaplan-configuration` lists `pickups` and `read_scope`. The
+app keeps that answer for five minutes, or for one minute when Synaplan did
+not answer, so a change on Synaplan's side shows within that time. A saved
+setting stays while they are hidden.
+
+A read arrives as a signed notice like a copy. The app checks the person's
+setting again, lists the folder with their credential and uploads what
+Synaplan asked for. A read that needs more than the notice's 20 seconds goes
+on in a background job: the files left to upload, or the whole read when
+going through the folder takes longer. A named folder stays allowed when it
+is renamed or moved, and Synaplan is told its new path. Watching folders is
+not in this release yet, so *Only what I watch* lets Synaplan read nothing
+for now.
+
 ## Development
 
 PHP 8.4 with Composer, and Node 26 with npm 11, on the host.
@@ -211,6 +242,16 @@ ownCloud.online instance on this host. They read that in the test stack's
 database through `synaplan-app-test` (`SYNAPLAN_APP_CONTAINER` names another)
 and delete nothing when that container and `E2E_SYNAPLAN_URL` are different
 stacks.
+
+Synaplan opens a folder read from a task's planning step, which needs a
+planning model. The folder-read journeys open the same request with the test
+stack's dev command `app:cloud-pickups:open-test` in that container. It reads
+through the Synaplan person's newest ownCloud link on any server, ended ones
+too, so when a later journey linked someone else, the journeys move the
+creation time of Ada's active link from this server to now. Synaplan allows
+a person 20 folder reads an hour, and one run of the journeys opens about
+six, so the global setup dates the test people's reads through this server
+an hour back.
 
 `make e2e-up` installs the dev stack with `DEV_SYNAPLAN=test`, which points
 the app at the test stack. After `make test-e2e` the app stays registered

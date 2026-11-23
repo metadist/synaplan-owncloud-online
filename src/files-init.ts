@@ -5,8 +5,9 @@
  * file type an action reads (see shared/mimes.ts). Each action resolves the
  * file id from the Files list model and opens the matching Vue modal, after
  * the consent card when the person has not agreed yet. Translate is added
- * once the server said the connected Synaplan translates; the Files list
- * shows an action registered later as well.
+ * once the server said the connected Synaplan translates, and "Let Synaplan
+ * read this folder" once it said the administrator lets people name
+ * folders; the Files list shows an action registered later as well.
  *
  * New → From Synaplan… is a plugin of the Files app's New menu: it copies the
  * person's Synaplan files into the folder that is open.
@@ -20,14 +21,17 @@ import SummaryModal from './components/SummaryModal.vue'
 import TranslateModal from './components/TranslateModal.vue'
 import { api } from './shared/api'
 import { isBlocked, loadConsent } from './shared/consent'
+import { failureFromError } from './shared/failures'
 import { CHAT_MIMES, SEARCHABLE_MIMES, SUMMARIZE_MIMES, TRANSLATE_MIMES } from './shared/mimes'
 import { openModal } from './shared/mount'
-import { APP_ID, translate as t } from './shared/oc'
+import { APP_ID, ApiError, translate as t } from './shared/oc'
 
 type FileContext = {
   fileList?: { getModelForFile?: (name: string) => { id?: number; get?: (k: string) => unknown } }
   fileInfoModel?: { id?: number; get?: (k: string) => unknown }
   $file?: { data?: (k: string) => unknown }
+  /** The folder that holds the row, as the Files app gives it. */
+  dir?: string
 }
 
 /** Best-effort resolution of the numeric file id across ownCloud.online variants. */
@@ -60,11 +64,37 @@ async function openGuarded(component: Component, props: Record<string, unknown>)
   })
 }
 
+/** A folder's path in the person's files, from the row's name and the folder that holds it. */
+export function folderPath(dir: string | undefined, name: string): string {
+  return `${(dir ?? '').replace(/\/+$/, '')}/${name}`.replace(/^\/+/, '')
+}
+
+/** The sentence for an administrator's limit the server named, if it named one. */
+function refusal(error: unknown): string | null {
+  const code = error instanceof ApiError ? error.code : ''
+  if (code === 'cap') {
+    return t('Synaplan may already read as many folders as your administrator allows.')
+  }
+  if (code === 'ceiling') {
+    return t('Your administrator lets Synaplan read only the folders you watch.')
+  }
+  return null
+}
+
+async function allowFolder(fileId: number, path: string): Promise<void> {
+  try {
+    await api.allowFolder(fileId, path)
+    OC.Notification.showTemporary(t('Synaplan may read this folder.'))
+  } catch (error) {
+    OC.Notification.showTemporary(refusal(error) ?? failureFromError(error).text)
+  }
+}
+
 type FileAction = {
   name: string
   label: string
   mimes: readonly string[]
-  open: (fileId: number, fileName: string) => void
+  open: (fileId: number, fileName: string, dir: string | undefined) => void
 }
 
 function register(): void {
@@ -91,7 +121,7 @@ function register(): void {
             OC.Notification.showTemporary(t('Could not determine the file id.'))
             return
           }
-          action.open(fileId, fileName)
+          action.open(fileId, fileName, context.dir)
         },
       })
     }
@@ -124,6 +154,14 @@ function register(): void {
           label: t('Translate with Synaplan'),
           mimes: TRANSLATE_MIMES,
           open: (fileId, fileName) => void openGuarded(TranslateModal, { fileId, fileName }),
+        })
+      }
+      if (features.read_folders) {
+        add({
+          name: 'synaplanReadFolder',
+          label: t('Let Synaplan read this folder'),
+          mimes: ['dir'],
+          open: (fileId, fileName, dir) => void allowFolder(fileId, folderPath(dir, fileName)),
         })
       }
     },

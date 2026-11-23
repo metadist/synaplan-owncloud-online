@@ -6,6 +6,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Controller;
 
 use OCA\OcoSynaplan\Controller\InboundController;
 use OCA\OcoSynaplan\Service\CopyDelivery;
+use OCA\OcoSynaplan\Service\FolderRead;
 use OCA\OcoSynaplan\Service\NotificationSignature;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
@@ -28,6 +29,7 @@ final class InboundControllerTest extends TestCase
 
     private NotifyKeyCache&MockObject $keys;
     private CopyDelivery&MockObject $copies;
+    private FolderRead&MockObject $reads;
     private PlatformLinkService&MockObject $links;
     private UserAccountService&MockObject $accounts;
     private MemoryCache $cache;
@@ -48,6 +50,7 @@ final class InboundControllerTest extends TestCase
         $this->secret = sodium_crypto_sign_secretkey($pair);
         $this->keys = $this->keysOf([['publicKey' => 'ed25519:' . self::b64(sodium_crypto_sign_publickey($pair)), 'kid' => 'test']]);
         $this->copies = $this->createMock(CopyDelivery::class);
+        $this->reads = $this->createMock(FolderRead::class);
         $this->links = $this->createMock(PlatformLinkService::class);
         $this->links->method('canActFor')->willReturnCallback(static fn (string $uid): bool => $uid === 'ada');
         $this->accounts = $this->createMock(UserAccountService::class);
@@ -96,6 +99,28 @@ final class InboundControllerTest extends TestCase
 
         foreach (['bob', ''] as $person) {
             $response = $this->receive($this->signed($this->notice('delivery', '9' . $person, $person)));
+
+            self::assertSame(Http::STATUS_CONFLICT, $response->getStatus(), $person);
+            self::assertSame('not_linked', $response->getData()['error']);
+        }
+    }
+
+    public function testAFolderReadIsTakenForThePersonTheNoticeNamesAndAnsweredLater(): void
+    {
+        $this->reads->expects($this->once())->method('handle')->with('31', 'ada');
+
+        $response = $this->receive($this->signed($this->notice('pickup', '31', 'ada')));
+
+        self::assertSame(Http::STATUS_ACCEPTED, $response->getStatus());
+        self::assertSame(['state' => 'accepted'], $response->getData());
+    }
+
+    public function testAFolderReadForSomeoneWithoutACredentialIsNotStarted(): void
+    {
+        $this->reads->expects($this->never())->method('handle');
+
+        foreach (['bob', ''] as $person) {
+            $response = $this->receive($this->signed($this->notice('pickup', '31' . $person, $person)));
 
             self::assertSame(Http::STATUS_CONFLICT, $response->getStatus(), $person);
             self::assertSame('not_linked', $response->getData()['error']);
@@ -202,7 +227,7 @@ final class InboundControllerTest extends TestCase
         $time = $this->createStub(ITimeFactory::class);
         $time->method('getTime')->willReturn(self::NOW);
 
-        $controller = new class ($body, $request, $config, $keys ?? $this->keys, $this->seen, $this->copies, $this->links, $this->accounts, $this->cache, $time, $this->createStub(ILogger::class)) extends InboundController {
+        $controller = new class ($body, $request, $config, $keys ?? $this->keys, $this->seen, $this->copies, $this->reads, $this->links, $this->accounts, $this->cache, $time, $this->createStub(ILogger::class)) extends InboundController {
             public function __construct(private string $sent, mixed ...$services)
             {
                 parent::__construct(...$services);

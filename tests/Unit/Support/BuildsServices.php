@@ -11,12 +11,14 @@ use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\OAuthClient;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
+use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
 use OCP\App\IAppManager;
 use OCP\DB\QueryBuilder\IExpressionBuilder;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\Files\IRootFolder;
 use OCP\IDBConnection;
 use OCP\ILogger;
 use OCP\IURLGenerator;
@@ -37,6 +39,8 @@ trait BuildsServices
     protected ?IUser $signedIn = null;
     /** Grants every lock at once when a test sets none. */
     protected ?ILockingProvider $locking = null;
+    /** Everyone's files; finds no folder when a test sets none. */
+    protected ?IRootFolder $root = null;
 
     /** @var array<string, object> */
     private array $built = [];
@@ -55,6 +59,7 @@ trait BuildsServices
         $this->cache = new MemoryCache();
         $this->signedIn = null;
         $this->locking = null;
+        $this->root = null;
         $this->built = [];
     }
 
@@ -148,6 +153,18 @@ trait BuildsServices
             $this->synaplanConfig(),
             $this->accounts(),
             $this->logger(),
+            $this->cache,
+        );
+    }
+
+    protected function readScope(): ReadScope
+    {
+        return $this->built['readScope'] ??= new ReadScope(
+            $this->config,
+            $this->db(),
+            $this->links(),
+            $this->root ??= $this->createStub(IRootFolder::class),
+            $this->locks(),
         );
     }
 

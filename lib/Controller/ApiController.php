@@ -15,6 +15,8 @@ use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Http\RespondsToFailures;
 use OCA\OcoSynaplan\Service\LanguageService;
+use OCA\OcoSynaplan\Service\PlatformLinkService;
+use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\UserAccountService;
 use OCP\App\IAppManager;
@@ -82,6 +84,8 @@ class ApiController extends Controller
         private IAppManager $appManager,
         private ILogger $logger,
         private UserAccountService $userAccounts,
+        private ReadScope $readScope,
+        private PlatformLinkService $links,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -119,14 +123,19 @@ class ApiController extends Controller
     }
 
     /**
-     * What the Files app offers, as far as it depends on the connected
-     * Synaplan: Translate only where Synaplan translates.
+     * What the Files app offers beyond its fixed actions: Translate only where
+     * the connected Synaplan translates, and "Let Synaplan read this folder"
+     * only where the administrator lets people name folders and Synaplan
+     * reads folders.
      *
      * @NoAdminRequired
      */
     public function features(): JSONResponse
     {
-        return new JSONResponse(['translation' => $this->synaplanClient->offersTranslation()]);
+        return new JSONResponse([
+            'translation' => $this->synaplanClient->offersTranslation(),
+            'read_folders' => $this->readScope->ceiling() !== ReadScope::MODE_WATCHED && $this->links->readsFolders(),
+        ]);
     }
 
     /**

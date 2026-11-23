@@ -43,6 +43,34 @@ const PLAN_WORDS: Record<string, Record<string, string>> = {
     fr: 'Utiliser Synaplan dans {app} ?',
     tr: '{app} içinde Synaplan kullanılsın mı?',
   },
+  'Let Synaplan read this folder': {
+    de: 'Synaplan diesen Ordner lesen lassen',
+    de_DE: 'Synaplan diesen Ordner lesen lassen',
+    es: 'Permitir que Synaplan lea esta carpeta',
+    fr: 'Autoriser Synaplan à lire ce dossier',
+    tr: "Synaplan'ın bu klasörü okumasına izin ver",
+  },
+  'Only what I watch': {
+    de: 'Nur was ich beobachte',
+    de_DE: 'Nur was ich beobachte',
+    es: 'Solo lo que vigilo',
+    fr: 'Seulement ce que je surveille',
+    tr: 'Yalnızca izlediklerim',
+  },
+  'Also folders I allow': {
+    de: 'Auch Ordner, die ich freigebe',
+    de_DE: 'Auch Ordner, die ich freigebe',
+    es: 'También las carpetas que permito',
+    fr: 'Aussi les dossiers que j’autorise',
+    tr: 'İzin verdiğim klasörler de',
+  },
+  'All my files': {
+    de: 'Alle meine Dateien',
+    de_DE: 'Alle meine Dateien',
+    es: 'Todos mis archivos',
+    fr: 'Tous mes fichiers',
+    tr: 'Tüm dosyalarım',
+  },
 }
 
 /** "Searchable by AI" is a state inside sentences; each locale uses the core's wording for it. */

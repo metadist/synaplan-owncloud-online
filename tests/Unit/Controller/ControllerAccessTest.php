@@ -71,6 +71,7 @@ final class ControllerAccessTest extends TestCase
 
         'preferences#get' => [self::PERSON],
         'preferences#save' => [self::PERSON],
+        'preferences#allowFolder' => [self::PERSON],
         'notices#list' => [self::PERSON],
         'notices#clear' => [self::PERSON],
         'fromSynaplan#list' => [self::PERSON],

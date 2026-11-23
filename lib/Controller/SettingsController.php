@@ -16,6 +16,7 @@ use OCA\OcoSynaplan\Exception\PlatformLinkException;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
+use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCP\AppFramework\Controller;
@@ -44,6 +45,7 @@ class SettingsController extends Controller
         private PlatformLinkService $platformLinks,
         private NotifyKeyCache $notifyKeys,
         private ILogger $logger,
+        private ReadScope $readScope,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -77,6 +79,8 @@ class SettingsController extends Controller
             'link_instance' => $this->registrationStatus(),
             'delivery_url' => (string) $this->config->getAppValue(Application::APP_ID, 'delivery_url', ''),
             'delivery_url_default' => $this->platformLinks->defaultDeliveryUrl(),
+            'read_scope_ceiling' => $this->readScope->ceiling(),
+            'read_folder_cap' => $this->readScope->cap(),
         ]);
     }
 
@@ -101,6 +105,8 @@ class SettingsController extends Controller
         ?string $synaplan_public_url = null,
         ?string $synaplan_public_url_local = null,
         ?string $delivery_url = null,
+        ?string $read_scope_ceiling = null,
+        ?int $read_folder_cap = null,
     ): JSONResponse {
         // Always re-read the raw body so the boolean flags also surface for PUT.
         $body = file_get_contents('php://input');
@@ -148,6 +154,12 @@ class SettingsController extends Controller
                 }
                 if ($delivery_url === null && array_key_exists('delivery_url', $decoded)) {
                     $delivery_url = trim((string) $decoded['delivery_url']);
+                }
+                if ($read_scope_ceiling === null && isset($decoded['read_scope_ceiling'])) {
+                    $read_scope_ceiling = trim((string) $decoded['read_scope_ceiling']);
+                }
+                if ($read_folder_cap === null && isset($decoded['read_folder_cap'])) {
+                    $read_folder_cap = (int) $decoded['read_folder_cap'];
                 }
             }
         }
@@ -214,6 +226,14 @@ class SettingsController extends Controller
 
         if ($link_auto_provision !== null) {
             $this->config->setAppValue(Application::APP_ID, 'link_auto_provision', $link_auto_provision ? '1' : '0');
+        }
+
+        if ($read_scope_ceiling !== null) {
+            $this->readScope->setCeiling($read_scope_ceiling);
+        }
+
+        if ($read_folder_cap !== null) {
+            $this->config->setAppValue(Application::APP_ID, ReadScope::CAP, (string) max(1, min(500, $read_folder_cap)));
         }
 
         // An empty address means this server's own inbound route.

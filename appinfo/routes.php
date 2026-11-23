@@ -66,6 +66,7 @@ return [
         ['name' => 'inbound#receive', 'url' => '/api/v1/inbound', 'verb' => 'POST'],
         ['name' => 'preferences#get', 'url' => '/api/v1/preferences', 'verb' => 'GET'],
         ['name' => 'preferences#save', 'url' => '/api/v1/preferences', 'verb' => 'PUT'],
+        ['name' => 'preferences#allowFolder', 'url' => '/api/v1/preferences/read-folders', 'verb' => 'POST'],
         ['name' => 'notices#list', 'url' => '/api/v1/notices', 'verb' => 'GET'],
         ['name' => 'notices#clear', 'url' => '/api/v1/notices', 'verb' => 'DELETE'],
 
