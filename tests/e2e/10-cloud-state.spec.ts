@@ -1,7 +1,10 @@
 import { type APIRequestContext, expect, test } from '@playwright/test'
 import {
   APP,
+  connectFromSettings,
+  createUser,
   davAs,
+  deleteUser,
   dialogOf,
   ensureConnected,
   instanceId,
@@ -15,6 +18,9 @@ import {
   queuedJobs,
   runJob,
   runSourceEvents,
+  shareWith,
+  staleInSynaplan,
+  SYNAPLAN_ADMIN,
   SYNAPLAN_PERSON,
   synaplanAs,
   synaplanFilesOf,
@@ -407,8 +413,8 @@ test.describe('the state of a file in Synaplan', () => {
         expect(renamed.ok(), `moving ${folder}: HTTP ${renamed.status()}`).toBe(true)
         expect(
           queuedEvents(UID).map((queued) => `${queued.step} ${queued.fileId}`),
-          'the request queues the folder and leaves its files to the job',
-        ).toEqual([`send ${folderId}`, `walk ${folderId}`])
+          'the request queues the folder and leaves its files and the people it is shared with to the job',
+        ).toEqual([`share ${folderId}`, `send ${folderId}`, `walk ${folderId}`])
 
         runSourceEvents(UID)
         expect(queuedEvents(UID), 'the job queued and sent the files').toEqual([])
@@ -442,6 +448,69 @@ test.describe('the state of a file in Synaplan', () => {
       await dav.delete(`${DAV}/${folder}`)
       await synaplan.dispose()
       await person.dispose()
+      await dav.dispose()
+    }
+  })
+
+  test('a change and a deletion by the owner reach the copy of the person a folder is shared with', async ({
+    browser,
+  }) => {
+    const stamp = Date.now()
+    // Gus connects a Synaplan account of his own: Synaplan applies an event
+    // to the copies of the person who reports it, so his copy follows only
+    // when the app reports the event for him too.
+    const gus = `gus-${stamp.toString(36)}`
+    await createUser(gus, `${gus}@example.org`)
+    const context = await browser.newContext({ baseURL: OCO_URL })
+    const dav = await davAs(UID)
+    const instance = await instanceId()
+    const { folder, held, heldId } = await shelf(dav, stamp)
+    try {
+      const page = await context.newPage()
+      await logIn(page, gus)
+      await connectFromSettings(page, SYNAPLAN_ADMIN)
+      await shareWith(UID, folder, gus)
+      const theirs = await ownCloudAs(gus)
+      try {
+        await makeSearchable(theirs, heldId, `Shared-${stamp}`, false)
+        const { synaplanFileId } = await detailOf(theirs, heldId)
+        expect(synaplanFileId, 'Gus has a copy of his own').toBeTruthy()
+
+        await withoutCron(async () => {
+          await change(dav, `${folder}/${held}`, stamp)
+          expect(queuedEvents(UID).map((queued) => `${queued.step} ${queued.fileId}`)).toEqual([
+            `share ${heldId}`,
+            `send ${heldId}`,
+          ])
+          runSourceEvents(UID)
+          expect(
+            queuedEvents(gus).map((queued) => `${queued.step} ${queued.event} ${queued.path}`),
+            'queued for Gus, at the path he sees',
+          ).toEqual([`send changed ${folder}/${held}`])
+          runSourceEvents(gus)
+        })
+        expect(staleInSynaplan(instance, heldId), 'Gus’s copy is marked changed').toEqual([synaplanFileId])
+
+        await withoutCron(async () => {
+          expect((await dav.delete(`${DAV}/${folder}/${held}`)).ok(), `moving ${held} to the trash`).toBe(true)
+          expect(
+            queuedEvents(gus).map((queued) => `${queued.step} ${queued.event}`),
+            'noted for Gus while the share was there',
+          ).toEqual(['send deleted'])
+          runSourceEvents(UID)
+          runSourceEvents(gus)
+        })
+        expect(
+          synaplanFilesOf(instance, heldId).find((file) => file.id === synaplanFileId)?.deletedAt,
+          'Gus’s copy left Synaplan',
+        ).toBeGreaterThan(0)
+      } finally {
+        await theirs.dispose()
+      }
+    } finally {
+      await deleteUser(gus)
+      await context.close()
+      await dav.delete(`${DAV}/${folder}`)
       await dav.dispose()
     }
   })

@@ -32,6 +32,8 @@ class SourceEventQueue
     public const STEP_WALK = 'walk';
     /** Below a folder about to be deleted; `walked` is the folder's id. */
     public const STEP_HELD = 'held';
+    /** The people the file is shared with are still to be told. */
+    public const STEP_SHARE = 'share';
 
     public function __construct(
         private IDBConnection $db,
@@ -210,16 +212,37 @@ class SourceEventQueue
     }
 
     /**
-     * The held rows of a folder deletion that happened become ready to send.
+     * The held rows of a deletion that happened become ready to send.
+     *
+     * @return list<string> the people whose rows they are
      */
-    public function release(int $folderId): void
+    public function release(int $folderId): array
     {
+        $select = $this->db->getQueryBuilder();
+        $select->selectDistinct('uid')
+            ->from(self::TABLE)
+            ->where($select->expr()->eq('step', $select->createNamedParameter(self::STEP_HELD)))
+            ->andWhere($select->expr()->eq('walked', $select->createNamedParameter($folderId, IQueryBuilder::PARAM_INT)));
+        $result = $select->execute();
+        $people = [];
+        if ($result instanceof Result) {
+            while (($row = $result->fetchAssociative()) !== false) {
+                $people[] = (string) $row['uid'];
+            }
+            $result->free();
+        }
+        if ($people === []) {
+            return [];
+        }
+
         $qb = $this->db->getQueryBuilder();
         $qb->update(self::TABLE)
             ->set('step', $qb->createNamedParameter(self::STEP_SEND))
             ->where($qb->expr()->eq('step', $qb->createNamedParameter(self::STEP_HELD)))
             ->andWhere($qb->expr()->eq('walked', $qb->createNamedParameter($folderId, IQueryBuilder::PARAM_INT)))
             ->execute();
+
+        return $people;
     }
 
     /**

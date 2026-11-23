@@ -13,6 +13,7 @@ namespace OCA\OcoSynaplan\Listener;
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
+use OCA\OcoSynaplan\Service\ShareRecipients;
 use OCA\OcoSynaplan\Service\SourceEventQueue;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCP\BackgroundJob\IJobList;
@@ -51,6 +52,7 @@ class SourceEventListener
         private IRootFolder $rootFolder,
         private IUserSession $userSession,
         private SourceEventQueue $queue,
+        private ShareRecipients $recipients,
     ) {
     }
 
@@ -85,8 +87,9 @@ class SourceEventListener
     }
 
     /**
-     * The files and folders below a folder are queued from the file cache
-     * before it goes, held until the delete went through.
+     * Before a deletion the shares still say who else holds the file: their
+     * rows go in now, held until the deletion went through, as do the files
+     * below a folder for everyone, from the file cache.
      */
     public function deleting(Node $node): void
     {
@@ -98,11 +101,17 @@ class SourceEventListener
             return;
         }
         $this->deleting[$node->getPath()] = $payload;
+        $ord = SourceEventQueue::now();
+        $id = (int) $payload['id'];
+        $told = array_values(array_unique(array_filter([$payload['uid'], $payload['owner']], static fn (string $uid): bool => $uid !== '')));
+        $recipients = $this->recipients->of($node, $told);
         if ($node instanceof Folder) {
-            $ord = SourceEventQueue::now();
-            foreach ($this->perPerson($payload) as $row) {
-                $this->queueDescendants($row['uid'], (int) $payload['id'], 'deleted', $ord, SourceEventQueue::STEP_HELD, (int) $payload['id']);
+            foreach ([...$told, ...$recipients] as $uid) {
+                $this->queueDescendants($uid, $id, 'deleted', $ord, SourceEventQueue::STEP_HELD, $id);
             }
+        }
+        foreach ($recipients as $uid) {
+            $this->queue->add($uid, ['id' => $payload['id'], 'event' => 'deleted', 'version' => $payload['version'], 'path' => ''], $ord, SourceEventQueue::STEP_HELD, $id);
         }
     }
 
@@ -114,8 +123,8 @@ class SourceEventListener
         if ($payload === null) {
             return;
         }
-        $this->report($node, $payload, SourceEventQueue::now());
-        $this->queue->release((int) $payload['id']);
+        $ord = SourceEventQueue::now();
+        $this->report($node, $payload, $ord, $this->queue->release((int) $payload['id']));
     }
 
     /**
@@ -146,17 +155,24 @@ class SourceEventListener
     /**
      * Queue a node's event in each person's queue, with the order of when it
      * happened, and wake each person's job. A moved folder leaves a walk for
-     * the job; a restored folder's files come from the file cache.
+     * the job; a restored folder's files come from the file cache. The job
+     * tells the people the file is shared with, through a share row ahead
+     * of the event.
      *
      * @param array{id: string, event: string, version: string, path: string, uid: string, owner: string}|null $payload
+     * @param list<string> $released the people whose held rows of a deletion are ready now
      */
-    private function report(Node $node, ?array $payload, int $ord): void
+    private function report(Node $node, ?array $payload, int $ord, array $released = []): void
     {
         if ($payload === null) {
             return;
         }
+        $rows = $this->perPerson($payload);
+        if ($rows !== [] && $payload['event'] !== 'deleted') {
+            $this->queue->add($rows[0]['uid'], $rows[0], $ord, SourceEventQueue::STEP_SHARE);
+        }
         $people = [];
-        foreach ($this->perPerson($payload) as $row) {
+        foreach ($rows as $row) {
             $this->queue->add($row['uid'], $row, $ord);
             $people[$row['uid']] = true;
             if (!$node instanceof Folder) {
@@ -167,6 +183,9 @@ class SourceEventListener
             } elseif ($payload['event'] === 'restored') {
                 $this->queueDescendants($row['uid'], (int) $row['id'], 'restored', $ord, SourceEventQueue::STEP_SEND);
             }
+        }
+        foreach ($released as $uid) {
+            $people[$uid] = true;
         }
         foreach (array_keys($people) as $uid) {
             $this->jobs->add(SourceEventsJob::class, ['uid' => (string) $uid]);

@@ -576,6 +576,55 @@ export function synaplanPathOf(instance: string, fileId: string): string {
   )
 }
 
+/**
+ * The Synaplan files made of one file of this ownCloud.online that Synaplan
+ * marks changed since it read them, from the test stack's database.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function staleInSynaplan(instance: string, fileId: string): number[] {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  return synaplanSql(
+    `SELECT CONCAT('stale:', COALESCE(GROUP_CONCAT(f.BID ORDER BY f.BID SEPARATOR ','), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}' AND f.BSTALE = 1`,
+    /stale:(\S*)/,
+    `the changed Synaplan files of ${fileId}`,
+  )
+    .split(',')
+    .filter((id) => id !== '')
+    .map(Number)
+}
+
+/**
+ * Share a file or folder of one person with another person, with every
+ * permission, as the share dialog does.
+ *
+ * @param path below the owner's files
+ * @return the share's id
+ */
+export async function shareWith(owner: string, path: string, recipient: string): Promise<string> {
+  const dav = await davAs(owner)
+  try {
+    const shared = await dav.post('/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json', {
+      headers: { 'OCS-APIREQUEST': 'true' },
+      form: { path: `/${path}`, shareType: '0', shareWith: recipient, permissions: '31' },
+    })
+    const body = (await shared.json()) as {
+      ocs: { meta: { statuscode: number; message: string }; data: { id?: string | number } }
+    }
+    expect(
+      shared.ok() && body.ocs.meta.statuscode === 200,
+      `sharing ${path} with ${recipient}: ${body.ocs.meta.message}`,
+    ).toBe(true)
+    return String(body.ocs.data.id)
+  } finally {
+    await dav.dispose()
+  }
+}
+
 /** This ownCloud.online's instance id at Synaplan, from the admin settings. */
 export async function instanceId(): Promise<string> {
   const admin = await ownCloudAs('admin')

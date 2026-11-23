@@ -7,12 +7,17 @@ namespace OCA\OcoSynaplan\Tests\Unit\BackgroundJob;
 use OCA\OcoSynaplan\BackgroundJob\ReuploadJob;
 use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
+use OCA\OcoSynaplan\Service\ShareRecipients;
 use OCA\OcoSynaplan\Service\SourceEventQueue;
 use OCA\OcoSynaplan\Tests\Unit\Support\ArraySourceEventQueue;
 use OCA\OcoSynaplan\Tests\Unit\Support\Locked;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\Files\Node;
 use OCP\ILogger;
+use OCP\IUser;
 use OCP\Lock\ILockingProvider;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
@@ -24,6 +29,10 @@ final class SourceEventsJobTest extends TestCase
     private ILockingProvider&MockObject $locks;
     private ILogger&MockObject $logger;
     private ArraySourceEventQueue $queue;
+    /** @var array<string, array<int, Node>> what each person sees, by file id */
+    private array $nodes = [];
+    /** @var list<string> */
+    private array $sharedWith = [];
     private int $now = 1_000;
     /** @var list<array{string, list<array<string, string>>}> */
     private array $sent = [];
@@ -74,7 +83,18 @@ final class SourceEventsJobTest extends TestCase
     {
         $time = $this->createStub(ITimeFactory::class);
         $time->method('getTime')->willReturnCallback(fn (): int => $this->now);
-        $job = new SourceEventsJob($this->links, $this->jobs, $this->queue, $this->locks, $this->logger, $time);
+        $rootFolder = $this->createStub(IRootFolder::class);
+        $rootFolder->method('getUserFolder')->willReturnCallback(function (string $uid): Folder {
+            $home = $this->createStub(Folder::class);
+            $home->method('getById')->willReturnCallback(fn (int $id): array => isset($this->nodes[$uid][$id]) ? [$this->nodes[$uid][$id]] : []);
+
+            return $home;
+        });
+        $recipients = $this->createStub(ShareRecipients::class);
+        $recipients->method('of')->willReturnCallback(
+            fn (Node $node, array $except): array => array_values(array_diff($this->sharedWith, $except)),
+        );
+        $job = new SourceEventsJob($this->links, $this->jobs, $this->queue, $this->locks, $this->logger, $time, $rootFolder, $recipients);
         $job->setId($id);
         $job->setArgument($argument);
         $job->execute($this->jobs);
@@ -209,6 +229,77 @@ final class SourceEventsJobTest extends TestCase
         $this->runJob(['uid' => 'ada']);
 
         self::assertSame(['ada changed 7'], $this->sentEvents());
+    }
+
+    /**
+     * @param class-string<Node> $class
+     */
+    private function node(string $class, string $path, string $owner): Node
+    {
+        $user = $this->createStub(IUser::class);
+        $user->method('getUID')->willReturn($owner);
+        $node = $class === Folder::class ? $this->createStub(Folder::class) : $this->createStub(Node::class);
+        $node->method('getPath')->willReturn($path);
+        $node->method('getOwner')->willReturn($user);
+
+        return $node;
+    }
+
+    public function testThePeopleAFileIsSharedWithAreToldWithTheirPath(): void
+    {
+        $this->nodes['bob'][42] = $this->node(Node::class, '/bob/files/Specs/spec.pdf', 'ada');
+        $this->nodes['carol'][42] = $this->node(Node::class, '/carol/files/From Ada/spec.pdf', 'ada');
+        $this->sharedWith = ['ada', 'bob', 'carol'];
+        $this->queue->add('bob', ['id' => '42', 'event' => 'changed', 'version' => 'e2', 'path' => 'Specs/spec.pdf'], 10, SourceEventQueue::STEP_SHARE);
+        $this->queue('bob', '42', 'changed', 10, 'Specs/spec.pdf');
+        $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
+
+        $this->runJob(['uid' => 'bob']);
+
+        self::assertSame(['carol send 42'], $this->queue->steps());
+        self::assertSame(['id' => '42', 'event' => 'changed', 'version' => 'e2', 'path' => 'From Ada/spec.pdf'], array_slice($this->queue->events()[0], 1));
+        self::assertSame(['add', [SourceEventsJob::class, ['uid' => 'carol']]], $this->list[0]);
+        self::assertSame(['bob changed 42'], $this->sentEvents());
+    }
+
+    public function testAMovedFolderIsWalkedForThePeopleItIsSharedWith(): void
+    {
+        $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Specs', 'ada');
+        $this->nodes['carol'][50] = $this->node(Folder::class, '/carol/files/Specs', 'ada');
+        $this->sharedWith = ['carol'];
+        $this->queue->add('ada', ['id' => '50', 'event' => 'moved', 'version' => 'e2', 'path' => 'Specs'], 10, SourceEventQueue::STEP_SHARE);
+        $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame(['carol send 50', 'carol walk 50'], $this->queue->steps());
+    }
+
+    public function testARestoredFolderIsQueuedFromTheFileCacheForThePeopleItIsSharedWith(): void
+    {
+        $this->nodes['ada'][50] = $this->node(Folder::class, '/ada/files/Specs', 'ada');
+        $this->nodes['carol'][50] = $this->node(Folder::class, '/carol/files/Specs', 'ada');
+        $this->queue->cache(3, 'files/Specs', 50);
+        $this->queue->cache(3, 'files/Specs/a.pdf', 51);
+        $this->sharedWith = ['carol'];
+        $this->queue->add('ada', ['id' => '50', 'event' => 'restored', 'version' => 'e2', 'path' => 'Specs'], 10, SourceEventQueue::STEP_SHARE);
+        $this->synaplanAnswers(static fn (): array => ['applied' => 1]);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame(['carol send 50', 'carol send 51'], $this->queue->steps());
+    }
+
+    public function testSomeoneWhoCannotSeeTheFileIsNotTold(): void
+    {
+        $this->nodes['ada'][42] = $this->node(Node::class, '/ada/files/spec.pdf', 'ada');
+        $this->sharedWith = ['dan'];
+        $this->queue->add('ada', ['id' => '42', 'event' => 'changed', 'version' => 'e2', 'path' => 'spec.pdf'], 10, SourceEventQueue::STEP_SHARE);
+
+        $this->runJob(['uid' => 'ada']);
+
+        self::assertSame([], $this->queue->rows);
+        self::assertNotContains(['add', [SourceEventsJob::class, ['uid' => 'dan']]], $this->list);
     }
 
     public function testARowOfAStepTheJobDoesNotKnowIsDroppedAndBlocksNothing(): void

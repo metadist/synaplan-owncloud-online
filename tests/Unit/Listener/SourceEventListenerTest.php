@@ -6,6 +6,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Listener;
 
 use OCA\OcoSynaplan\BackgroundJob\SourceEventsJob;
 use OCA\OcoSynaplan\Listener\SourceEventListener;
+use OCA\OcoSynaplan\Service\ShareRecipients;
 use OCA\OcoSynaplan\Tests\Unit\Support\ArraySourceEventQueue;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCP\BackgroundJob\IJobList;
@@ -30,12 +31,16 @@ final class SourceEventListenerTest extends TestCase
 
     private ArraySourceEventQueue $events;
 
+    /** @var array<int, list<string>> who else holds each file id, with a credential */
+    private array $sharedWith = [];
+
     protected function setUp(): void
     {
         $this->setUpServices(['mode' => 'link', 'link_instance_id' => 'client-1']);
         $this->signIn($this->person('ada'));
         $this->queued = [];
         $this->userFolders = [];
+        $this->sharedWith = [];
         $this->events = new ArraySourceEventQueue();
     }
 
@@ -74,12 +79,46 @@ final class SourceEventListenerTest extends TestCase
         self::assertSame([], $this->queued);
     }
 
+    public function testAChangeLeavesThePeopleTheFileIsSharedWithToTheJob(): void
+    {
+        $this->listener()->written($this->file(42, '/ada/files/Specs/spec.pdf', 'ada', '"e2"'));
+
+        self::assertSame(['ada share 42', 'ada send 42'], $this->events->steps());
+    }
+
+    public function testADeletedFileIsReportedForThePeopleItWasSharedWithToo(): void
+    {
+        $this->sharedWith[42] = ['bob'];
+        $listener = $this->listener();
+        $listener->deleting($this->file(42, '/ada/files/Specs/spec.pdf', 'ada', '"e2"'));
+
+        self::assertSame(['bob held 42'], $this->events->steps(), 'read while the shares are still there');
+
+        $listener->deleted($this->gone('/ada/files/Specs/spec.pdf'));
+
+        self::assertSame([
+            ['uid' => 'bob', 'id' => '42', 'event' => 'deleted', 'version' => '"e2"', 'path' => ''],
+            ['uid' => 'ada', 'id' => '42', 'event' => 'deleted', 'version' => '"e2"', 'path' => 'Specs/spec.pdf'],
+        ], $this->events->events());
+        self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']], [SourceEventsJob::class, ['uid' => 'bob']]], $this->queued);
+    }
+
+    public function testADeletedSharedFolderTakesItsFilesFromThePeopleItWasSharedWith(): void
+    {
+        $this->sharedWith[50] = ['bob'];
+        $listener = $this->listener();
+        $listener->deleting($this->specsFolder());
+        $listener->deleted($this->gone('/ada/files/Specs'));
+
+        self::assertSame(['ada send 51', 'ada send 52', 'bob send 51', 'bob send 52', 'bob send 50', 'ada send 50'], $this->events->steps());
+    }
+
     public function testAMovedFolderLeavesItsFilesToTheJob(): void
     {
         $this->listener()->renamed($this->specsFolder());
 
-        self::assertSame(['ada send 50', 'ada walk 50'], $this->events->steps());
-        self::assertSame('Specs', array_values($this->events->rows)[1]['path']);
+        self::assertSame(['ada share 50', 'ada send 50', 'ada walk 50'], $this->events->steps());
+        self::assertSame('Specs', array_values($this->events->rows)[2]['path']);
         self::assertCount(1, array_unique(array_map(static fn (array $row): int => $row['ord'], $this->events->rows)), 'one change, one order');
         self::assertSame(0, $this->events->cacheReads);
         self::assertSame([[SourceEventsJob::class, ['uid' => 'ada']]], $this->queued);
@@ -93,8 +132,8 @@ final class SourceEventListenerTest extends TestCase
         $listener->written($this->file(7, '/ada/files/a.txt', 'ada', '"e2"'));
 
         self::assertSame(['"e1"', '"e2"'], array_map(static fn (array $event): string => $event['version'], $this->events->events()));
-        $rows = array_values($this->events->rows);
-        self::assertLessThan($rows[1]['ord'], $rows[0]['ord']);
+        $sends = array_values(array_filter($this->events->rows, static fn (array $row): bool => $row['step'] === 'send'));
+        self::assertLessThan($sends[1]['ord'], $sends[0]['ord']);
     }
 
     public function testADeletedFolderQueuesItsFilesFromTheFileCacheOnceTheDeletionHappened(): void
@@ -241,8 +280,10 @@ final class SourceEventListenerTest extends TestCase
         });
         $root = $this->createStub(IRootFolder::class);
         $root->method('getUserFolder')->willReturnCallback(fn (string $uid): Folder => $this->userFolders[$uid] ?? $this->userFolder([]));
+        $recipients = $this->createStub(ShareRecipients::class);
+        $recipients->method('of')->willReturnCallback(fn (Node $node): array => $this->sharedWith[(int) $node->getId()] ?? []);
 
-        return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session(), $this->events);
+        return new SourceEventListener($this->synaplanConfig(), $this->config, $jobs, $root, $this->session(), $this->events, $recipients);
     }
 
     private function owner(string $uid): IUser

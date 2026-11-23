@@ -171,7 +171,10 @@ answer, no bird shows and the tab says "Couldn't check Synaplan right now".
 
 When a file changes, moves, goes to the trash or comes back from it, the app
 queues the event for the person it happened to, and for a shared file for its
-owner too; for a folder, also for each file and folder inside it. The
+owner and for each person it is shared with who holds a Synaplan connection,
+at the path they see it at, so the copies they made follow too; for a
+deletion they are noted before the shares go. For a folder, the same goes
+for each file and folder inside it. The
 request reads no file below a folder, so a large one answers at once: the
 files inside a deleted or restored folder go into the queue from the file
 cache in one statement, and those of a moved folder are queued by the

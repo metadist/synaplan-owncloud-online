@@ -14,9 +14,13 @@ namespace OCA\OcoSynaplan\BackgroundJob;
 use OC\BackgroundJob\Job;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
+use OCA\OcoSynaplan\Service\ShareRecipients;
 use OCA\OcoSynaplan\Service\SourceEventQueue;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\Files\Node;
 use OCP\ILogger;
 use OCP\Lock\ILockingProvider;
 use OCP\Lock\LockedException;
@@ -56,6 +60,8 @@ class SourceEventsJob extends Job
     private ILockingProvider $locks;
     private ILogger $logger;
     private ITimeFactory $time;
+    private IRootFolder $rootFolder;
+    private ShareRecipients $recipients;
 
     /**
      * The server builds jobs in its own container, which cannot build this
@@ -68,8 +74,11 @@ class SourceEventsJob extends Job
         ?ILockingProvider $locks = null,
         ?ILogger $logger = null,
         ?ITimeFactory $time = null,
+        ?IRootFolder $rootFolder = null,
+        ?ShareRecipients $recipients = null,
     ) {
-        if ($links === null || $jobs === null || $queue === null || $locks === null || $logger === null || $time === null) {
+        if ($links === null || $jobs === null || $queue === null || $locks === null || $logger === null || $time === null
+            || $rootFolder === null || $recipients === null) {
             $container = (new Application())->getContainer();
             $links = $container->query(PlatformLinkService::class);
             $jobs = $container->query(IJobList::class);
@@ -77,6 +86,8 @@ class SourceEventsJob extends Job
             $locks = $container->query(ILockingProvider::class);
             $logger = $container->query(ILogger::class);
             $time = $container->query(ITimeFactory::class);
+            $rootFolder = $container->query(IRootFolder::class);
+            $recipients = $container->query(ShareRecipients::class);
         }
         $this->links = $links;
         $this->jobs = $jobs;
@@ -84,6 +95,8 @@ class SourceEventsJob extends Job
         $this->locks = $locks;
         $this->logger = $logger;
         $this->time = $time;
+        $this->rootFolder = $rootFolder;
+        $this->recipients = $recipients;
     }
 
     /**
@@ -140,6 +153,9 @@ class SourceEventsJob extends Job
                     return;
                 }
                 $this->queue->removeHeld($uid, $head['walked']);
+            } elseif ($head['step'] === SourceEventQueue::STEP_SHARE) {
+                $this->share($head);
+                $this->queue->remove([$head['seq']]);
             } elseif ($head['step'] === SourceEventQueue::STEP_SEND) {
                 $this->send($uid, $this->leadingSends($rows), $now);
             } else {
@@ -149,6 +165,52 @@ class SourceEventsJob extends Job
                 return;
             }
         }
+    }
+
+    /**
+     * Queue the event for each person the file is shared with, with the path
+     * they see it at, in their own queue and with the same order.
+     *
+     * @param QueuedEvent $row
+     */
+    private function share(array $row): void
+    {
+        $node = $this->nodeOf($row['uid'], $row['file_id']);
+        if ($node === null) {
+            return;
+        }
+        try {
+            // A storage without an owner answers null despite the signature.
+            $owner = (string) $node->getOwner()->getUID();
+        } catch (\Throwable) {
+            $owner = '';
+        }
+        $event = ['id' => (string) $row['file_id'], 'event' => $row['event'], 'version' => $row['version']];
+        foreach ($this->recipients->of($node, [$row['uid'], $owner]) as $uid) {
+            $theirs = $this->nodeOf($uid, $row['file_id']);
+            if ($theirs === null) {
+                continue;
+            }
+            $path = preg_match('#^/[^/]+/files/(.+)$#', $theirs->getPath(), $match) === 1 ? trim($match[1], '/') : '';
+            $this->queue->add($uid, $event + ['path' => strlen($path) <= 255 ? $path : ''], $row['ord']);
+            if ($theirs instanceof Folder && $row['event'] === 'moved') {
+                $this->queue->add($uid, $event + ['path' => strlen($path) <= 255 ? $path : ''], $row['ord'], SourceEventQueue::STEP_WALK);
+            } elseif ($theirs instanceof Folder && $row['event'] === 'restored') {
+                $this->queue->addDescendants($uid, $row['file_id'], 'restored', $row['ord'], SourceEventQueue::STEP_SEND);
+            }
+            $this->jobs->add(self::class, ['uid' => $uid]);
+        }
+    }
+
+    private function nodeOf(string $uid, int $id): ?Node
+    {
+        try {
+            $node = $this->rootFolder->getUserFolder($uid)->getById($id)[0] ?? null;
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $node instanceof Node ? $node : null;
     }
 
     /**

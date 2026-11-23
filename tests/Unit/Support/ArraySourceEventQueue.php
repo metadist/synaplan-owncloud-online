@@ -107,13 +107,17 @@ final class ArraySourceEventQueue extends SourceEventQueue
         return $out;
     }
 
-    public function release(int $folderId): void
+    public function release(int $folderId): array
     {
+        $people = [];
         foreach ($this->rows as $seq => $row) {
             if ($row['step'] === self::STEP_HELD && $row['walked'] === $folderId) {
                 $this->rows[$seq]['step'] = self::STEP_SEND;
+                $people[$row['uid']] = true;
             }
         }
+
+        return array_map('strval', array_keys($people));
     }
 
     public function removeHeld(string $uid, int $folderId): void
