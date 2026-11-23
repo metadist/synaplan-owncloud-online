@@ -15,7 +15,9 @@ talks to the **Synaplan backend API**.
   Synaplan takes each new version of the file by itself.
 - **What Synaplan made of a file** — a bird after the name of each file
   Synaplan holds says whether the AI can search it, is still adding it or is
-  taking a new version. It opens the file's **Synaplan** tab in the details
+  taking a new version; while Synaplan is at work on it, the bird asks again
+  a few times, later each time, as long as the folder is open. It opens the
+  file's **Synaplan** tab in the details
   view: who owns it, who else can use it, what it touches and where it came
   from, with **Remove from Synaplan** and **Open in Synaplan**. The research
   page lists the person's searchable files.

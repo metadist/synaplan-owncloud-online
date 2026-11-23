@@ -1,7 +1,8 @@
 /**
  * Asks Synaplan what it made of the files of a folder view: every row
  * rendered within 50 ms goes into one request of at most 500 files, and each
- * answer is kept for a minute per version of the file.
+ * answer is kept for a minute per version of the file, unless Synaplan is
+ * still at work on the file.
  */
 import { api, type CloudStatusItem, type GlyphOverrides } from '../shared/api'
 
@@ -14,6 +15,8 @@ export interface ResolvedRowStatus {
 }
 
 const CACHE_TTL_MS = 60_000
+/** How long a row waits each time before asking again while Synaplan is still at work on its file, or gave no answer. */
+export const REFRESH_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000]
 const BATCH_WINDOW_MS = 50
 const MAX_BATCH = 500
 
@@ -32,6 +35,27 @@ let lastGlyphs: GlyphOverrides = {}
 let lastOpenSynaplanUrl = ''
 
 const cacheKey = (id: string, version: string): string => `${id}:${version}`
+
+/** Whether a row's answer will not change on its own: Synaplan answered and is not adding or updating the file. */
+function settled(status: ResolvedRowStatus): boolean {
+  if (status.unreachable) {
+    return false
+  }
+  if (!status.enabled) {
+    return true
+  }
+  return status.item?.state !== 'adding' && status.item?.state !== 'updating'
+}
+
+/**
+ * How long a row shown with this answer waits before asking again, or null
+ * when it need not ask.
+ *
+ * @param attempt how often the row asked again since it was drawn, or since the person last changed what Synaplan holds
+ */
+export function refreshDelay(status: ResolvedRowStatus, attempt: number): number | null {
+  return settled(status) ? null : (REFRESH_DELAYS_MS[attempt] ?? null)
+}
 
 /** Listen for the moment the person changed what Synaplan holds; returns the unsubscribe. */
 export function onCloudStatusInvalidated(listener: () => void): () => void {
@@ -54,7 +78,7 @@ export function isCloudStatusEnabled(): boolean | null {
 /** The state of one file in the version the row shows. */
 export function requestRowStatus(id: string, version: string): Promise<ResolvedRowStatus> {
   if (featureEnabled === false) {
-    return Promise.resolve(settled(false, false, null))
+    return Promise.resolve(rowStatus(false, false, null))
   }
   const key = cacheKey(id, version)
   const hit = cache.get(key)
@@ -72,7 +96,7 @@ export function requestRowStatus(id: string, version: string): Promise<ResolvedR
   })
 }
 
-function settled(enabled: boolean, unreachable: boolean, item: CloudStatusItem | null): ResolvedRowStatus {
+function rowStatus(enabled: boolean, unreachable: boolean, item: CloudStatusItem | null): ResolvedRowStatus {
   return { enabled, unreachable, item, glyphs: lastGlyphs, openSynaplanUrl: lastOpenSynaplanUrl }
 }
 
@@ -101,15 +125,15 @@ async function flush(): Promise<void> {
       }
       const expiresAt = Date.now() + CACHE_TTL_MS
       for (const entry of slice) {
-        const status = settled(enabled, unreachable, byId.get(entry.id) ?? null)
-        if (enabled && !unreachable) {
+        const status = rowStatus(enabled, unreachable, byId.get(entry.id) ?? null)
+        if (enabled && settled(status)) {
           cache.set(cacheKey(entry.id, entry.version), { expiresAt, value: status })
         }
         entry.resolvers.forEach((resolve) => resolve(status))
       }
     } catch {
       for (const entry of slice) {
-        const status = settled(featureEnabled ?? false, true, null)
+        const status = rowStatus(featureEnabled ?? false, true, null)
         entry.resolvers.forEach((resolve) => resolve(status))
       }
     }

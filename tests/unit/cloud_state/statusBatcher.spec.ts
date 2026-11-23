@@ -98,6 +98,21 @@ describe('the state of the rows', () => {
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
+  it('is not kept while Synaplan is still adding or updating the file', async () => {
+    const { requestRowStatus } = await batcher()
+    answer = (items) =>
+      Response.json({ success: true, enabled: true, items: items.map(({ id }) => ({ id, state: 'updating' })) })
+    const first = requestRowStatus('7', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    expect((await first).item?.state).toBe('updating')
+
+    answer = searchable
+    const second = requestRowStatus('7', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    expect((await second).item?.state).toBe('searchable')
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it('is asked again after Synaplan could not be reached', async () => {
     const { requestRowStatus } = await batcher()
     answer = () => Response.json({ success: true, enabled: true, unreachable: true, items: [] })

@@ -8,7 +8,7 @@ import { createApp, ref, type App } from 'vue'
 import FilesSidebarTab from '../components/FilesSidebarTab.vue'
 import { loadFeatures } from '../shared/features'
 import { badgeForState, colorForState, glyphMarkup, labelForState } from './glyphs'
-import { onCloudStatusInvalidated, requestRowStatus } from './statusBatcher'
+import { onCloudStatusInvalidated, refreshDelay, requestRowStatus, type ResolvedRowStatus } from './statusBatcher'
 
 export const SIDEBAR_TAB_ID = 'synaplanTabView'
 
@@ -22,19 +22,22 @@ export function rowVersion(row: Element): string {
   return (row.getAttribute('data-etag') ?? '').replace(/^"|"$/g, '')
 }
 
-/** Draw the bird of one file row, or none where Synaplan holds nothing of it. */
-export async function drawBird(fileList: OcFileList, row: HTMLElement): Promise<void> {
+/**
+ * Draw the bird of one file row, or none where Synaplan holds nothing of it.
+ * Gives the answer it drew from, or null for a row that is no file.
+ */
+export async function drawBird(fileList: OcFileList, row: HTMLElement): Promise<ResolvedRowStatus | null> {
   const id = row.getAttribute('data-id') ?? ''
   const name = row.getAttribute('data-file') ?? ''
   if (!/^\d+$/.test(id) || name === '' || row.getAttribute('data-type') === 'dir') {
-    return
+    return null
   }
   const status = await requestRowStatus(id, rowVersion(row))
   row.querySelector('.' + BIRD_CLASS)?.remove()
   const nameText = row.querySelector('td.filename a.name span.nametext')
   const state = status.item?.state ?? 'none'
   if (!row.isConnected || !nameText || !status.enabled || status.unreachable || state === 'none') {
-    return
+    return status
   }
 
   const folder = status.item?.knowledge_folder?.name || status.item?.knowledge_folder?.key || null
@@ -64,6 +67,50 @@ export async function drawBird(fileList: OcFileList, row: HTMLElement): Promise<
   // Inside the name, after the extension: the themes lay out `a.name` as a row
   // that pushes anything beside the name under the file actions.
   nameText.append(bird)
+  return status
+}
+
+/** How often each row asked again while Synaplan was at work on its file, its next time, and its latest drawing. */
+const followUps = new WeakMap<
+  HTMLElement,
+  { attempt: number; timer: ReturnType<typeof setTimeout> | null; drawing: number }
+>()
+
+/**
+ * Draw a row's bird and, while Synaplan is still at work on its file or gave
+ * no answer, draw it again after a while, a few times, as long as the row is
+ * shown.
+ *
+ * @param fresh whether the row starts over: it was just drawn, or the person changed what Synaplan holds
+ */
+async function drawAndFollow(fileList: OcFileList, row: HTMLElement, fresh: boolean): Promise<void> {
+  const followUp = followUps.get(row) ?? { attempt: 0, timer: null, drawing: 0 }
+  followUps.set(row, followUp)
+  if (fresh) {
+    followUp.attempt = 0
+  }
+  if (followUp.timer !== null) {
+    clearTimeout(followUp.timer)
+    followUp.timer = null
+  }
+  const drawing = ++followUp.drawing
+  const status = await drawBird(fileList, row)
+  // Files draws all its rows again when the file actions change, often
+  // before the answer for the first drawing is in.
+  if (drawing !== followUp.drawing) {
+    return
+  }
+  const delay = status === null ? null : refreshDelay(status, followUp.attempt)
+  if (delay === null) {
+    return
+  }
+  followUp.attempt++
+  followUp.timer = setTimeout(() => {
+    followUp.timer = null
+    if (row.isConnected) {
+      void drawAndFollow(fileList, row, false)
+    }
+  }, delay)
 }
 
 /**
@@ -80,7 +127,7 @@ export function rowsOf(files: ArrayLike<unknown>): HTMLElement[] {
 
 function drawBirds(fileList: OcFileList, rows: ArrayLike<unknown>): void {
   for (const row of rowsOf(rows)) {
-    void drawBird(fileList, row)
+    void drawAndFollow(fileList, row, true)
   }
 }
 

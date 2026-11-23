@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../src/components/FilesSidebarTab.vue', async () => {
   const { h } = await import('vue')
@@ -269,6 +269,102 @@ describe('the bird in the Files list', () => {
     expect(list.registerTabView).not.toHaveBeenCalled()
     expect(errors).not.toHaveBeenCalled()
     errors.mockRestore()
+  })
+})
+
+describe('a bird Synaplan is still at work on', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The row of file 7, drawn in a list of the person's files. */
+  async function drawnRow(): Promise<HTMLElement> {
+    const list = fileList()
+    ;(await plugin()).attach(list)
+    const tr = row(list, '7', 'plan.docx')
+    list.rendered([tr])
+    await vi.advanceTimersByTimeAsync(50)
+    return tr
+  }
+
+  const stateOf = (tr: HTMLElement): string | null => bird(tr)?.getAttribute('data-synaplan-state') ?? null
+
+  it('turns into what Synaplan made of the file on its own', async () => {
+    states = { '7': 'updating' }
+    const tr = await drawnRow()
+    expect(stateOf(tr)).toBe('updating')
+
+    await vi.advanceTimersByTimeAsync(10_050)
+    expect(stateOf(tr)).toBe('updating')
+    states = { '7': 'searchable' }
+    await vi.advanceTimersByTimeAsync(30_050)
+    expect(stateOf(tr)).toBe('searchable')
+
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(statusRequests()).toHaveLength(3)
+  })
+
+  it('shows up once Synaplan answers again', async () => {
+    reachable = false
+    const tr = await drawnRow()
+    expect(stateOf(tr)).toBeNull()
+
+    reachable = true
+    await vi.advanceTimersByTimeAsync(10_050)
+    expect(stateOf(tr)).toBe('searchable')
+  })
+
+  it('stops asking after the last wait', async () => {
+    states = { '7': 'adding' }
+    await drawnRow()
+
+    await vi.advanceTimersByTimeAsync(24 * 3_600_000)
+    expect(statusRequests()).toHaveLength(6)
+  })
+
+  it('asks again as a row drawn once does when Files draws it again before the answer is in', async () => {
+    states = { '7': 'adding' }
+    const list = fileList()
+    ;(await plugin()).attach(list)
+    const tr = row(list, '7', 'plan.docx')
+    // As when an app adds a file action after a page of rows was drawn.
+    list.renderedPage([tr])
+    list.rendered([tr])
+    await vi.advanceTimersByTimeAsync(50)
+    const drawn = statusRequests().length
+
+    await vi.advanceTimersByTimeAsync(10_050)
+    expect(statusRequests(), 'the first time after 10 seconds').toHaveLength(drawn + 1)
+    await vi.advanceTimersByTimeAsync(24 * 3_600_000)
+    expect(statusRequests()).toHaveLength(drawn + 5)
+    expect(stateOf(tr)).toBe('adding')
+  })
+
+  it('stops asking once its row is gone', async () => {
+    states = { '7': 'adding' }
+    const tr = await drawnRow()
+    tr.remove()
+
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(statusRequests()).toHaveLength(1)
+  })
+
+  it('starts over once the person changed what Synaplan holds', async () => {
+    states = { '7': 'adding' }
+    const tr = await drawnRow()
+    await vi.advanceTimersByTimeAsync(24 * 3_600_000)
+    expect(statusRequests()).toHaveLength(6)
+
+    const { invalidateCloudStatusCache } = await import('../../../src/cloud_state/statusBatcher')
+    invalidateCloudStatusCache()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(statusRequests()).toHaveLength(7)
+    await vi.advanceTimersByTimeAsync(10_050)
+    expect(statusRequests()).toHaveLength(8)
+    expect(stateOf(tr)).toBe('adding')
   })
 })
 
