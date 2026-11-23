@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { badgeForState, glyphMarkup } from '../cloud_state/glyphs'
 import { invalidateCloudStatusCache, onCloudStatusInvalidated } from '../cloud_state/statusBatcher'
-import { api, type CloudFileStateCode, type GlyphOverrides } from '../shared/api'
+import { api, type CloudFileStateCode, type CloudWatchSummary, type GlyphOverrides } from '../shared/api'
 import { describeFailure, failureFromError } from '../shared/failures'
 import { openGuarded } from '../shared/guarded'
 import { injectModalStyles } from '../shared/mount'
 import { APP_NAME, notify, translate as t } from '../shared/oc'
+import { controlsFor, policyStopped } from '../shared/watchControls'
+import { resumeWatch, setWatchState, stopWatch } from '../shared/watches'
 import ChatPanel from './ChatPanel.vue'
 import FailureNote from './FailureNote.vue'
 import KnowledgeModal from './KnowledgeModal.vue'
@@ -22,11 +24,14 @@ const loading = ref(false)
 const removing = ref(false)
 const enabled = ref(true)
 const unreachable = ref(false)
+const kind = ref<'file' | 'folder'>('file')
 const state = ref<CloudFileStateCode>('none')
 const knowledgeFolder = ref<string | null>(null)
 const keptUpToDate = ref(false)
 const glyphs = ref<GlyphOverrides>({})
 const openSynaplanUrl = ref('')
+const watches = ref<CloudWatchSummary[]>([])
+const busyWatch = ref<number | null>(null)
 let loadSeq = 0
 
 const notConnected = describeFailure('not_connected')
@@ -34,7 +39,19 @@ const fileName = computed(() => props.fileNameRef.value)
 const held = computed(() => state.value !== 'none')
 const folderName = computed(() => knowledgeFolder.value || 'DEFAULT')
 
+const watching = computed(() => watches.value.length > 0)
+const firstWatchState = computed(() => {
+  const first = watches.value[0]
+  if (!first) {
+    return null
+  }
+  return first.policy_off ? 'attention' : first.state
+})
+
 const heading = computed(() => {
+  if (kind.value === 'folder') {
+    return watching.value ? t('Watched by Synaplan') : t('Synaplan is not watching this folder.')
+  }
   switch (state.value) {
     case 'searchable':
       return t('Searchable by AI')
@@ -52,6 +69,15 @@ const heading = computed(() => {
 })
 
 const stateClass = computed(() => {
+  if (firstWatchState.value === 'attention') {
+    return 'is-error'
+  }
+  if (firstWatchState.value === 'paused') {
+    return 'is-warn'
+  }
+  if (kind.value === 'folder') {
+    return watching.value ? 'is-ok' : 'is-muted'
+  }
   switch (state.value) {
     case 'failed':
       return 'is-error'
@@ -67,7 +93,14 @@ const stateClass = computed(() => {
   }
 })
 
-const iconHtml = computed(() => glyphMarkup({ badge: badgeForState(state.value), size: 20, overrides: glyphs.value }))
+const iconHtml = computed(() =>
+  glyphMarkup({
+    eyes: watching.value,
+    badge: badgeForState(state.value, firstWatchState.value),
+    size: 20,
+    overrides: glyphs.value,
+  }),
+)
 
 async function load(): Promise<void> {
   const id = props.fileIdRef.value
@@ -83,11 +116,13 @@ async function load(): Promise<void> {
     }
     enabled.value = detail.enabled === true
     unreachable.value = detail.unreachable === true
+    kind.value = detail.kind === 'folder' ? 'folder' : 'file'
     state.value = detail.state ?? 'none'
     knowledgeFolder.value = detail.knowledgeFolder || null
     keptUpToDate.value = detail.keptUpToDate === true
     glyphs.value = detail.glyphs ?? {}
     openSynaplanUrl.value = detail.openSynaplanUrl ?? ''
+    watches.value = Array.isArray(detail.watches) ? detail.watches : []
   } catch {
     if (seq === loadSeq) {
       unreachable.value = true
@@ -113,6 +148,28 @@ async function remove(): Promise<void> {
     notify(failureFromError(error).text)
   } finally {
     removing.value = false
+  }
+}
+
+async function changeWatch(id: number, next: 'paused' | 'active'): Promise<void> {
+  busyWatch.value = id
+  try {
+    if (await (next === 'active' ? resumeWatch(id) : setWatchState(id, next))) {
+      invalidateCloudStatusCache()
+    }
+  } finally {
+    busyWatch.value = null
+  }
+}
+
+async function endWatch(id: number): Promise<void> {
+  busyWatch.value = id
+  try {
+    if (await stopWatch(id, fileName.value)) {
+      invalidateCloudStatusCache()
+    }
+  } finally {
+    busyWatch.value = null
   }
 }
 
@@ -158,7 +215,7 @@ onBeforeUnmount(onCloudStatusInvalidated(() => void load()))
           </div>
         </div>
 
-        <div v-if="held">
+        <div v-if="kind === 'file' && held">
           <div class="synaplan-tab-section">
             <div class="synaplan-tab-question">{{ t('Who owns this') }}</div>
             <div class="synaplan-tab-answer">{{ t('Added by you.') }}</div>
@@ -186,12 +243,54 @@ onBeforeUnmount(onCloudStatusInvalidated(() => void load()))
             </div>
           </div>
         </div>
-        <p v-else class="synaplan-tab-empty">
+        <p v-else-if="kind === 'file'" class="synaplan-tab-empty">
           {{ t('The AI can then find this file when you ask a question, here in the chat or in Synaplan.') }}
         </p>
       </div>
 
-      <div class="synaplan-tab-actions">
+      <div v-for="item in watches" :key="item.id" class="synaplan-tab-watch" data-testid="synaplan-sidebar-watch">
+        <div class="synaplan-tab-watch-sentence">
+          {{ item.policy_off ? policyStopped(item.policy_off) : item.sentence }}
+        </div>
+        <div class="synaplan-tab-answer">
+          {{
+            kind === 'folder'
+              ? t('Everyone who can open this folder sees that it is watched.')
+              : t('Everyone who can open this file sees that it is watched.')
+          }}
+        </div>
+        <div class="synaplan-tab-watch-controls">
+          <button
+            v-if="controlsFor(item.state, item.policy_off).pause"
+            class="oco-btn"
+            :disabled="busyWatch === item.id"
+            data-testid="synaplan-sidebar-watch-pause"
+            @click="changeWatch(item.id, 'paused')"
+          >
+            {{ t('Pause') }}
+          </button>
+          <button
+            v-if="controlsFor(item.state, item.policy_off).resume"
+            class="oco-btn"
+            :disabled="busyWatch === item.id"
+            data-testid="synaplan-sidebar-watch-resume"
+            @click="changeWatch(item.id, 'active')"
+          >
+            {{ t('Resume') }}
+          </button>
+          <button
+            v-if="controlsFor(item.state, item.policy_off).stop"
+            class="oco-btn synaplan-tab-remove"
+            :disabled="busyWatch === item.id"
+            data-testid="synaplan-sidebar-watch-stop"
+            @click="endWatch(item.id)"
+          >
+            {{ t('Stop watching') }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="kind === 'file'" class="synaplan-tab-actions">
         <button v-if="held" class="oco-btn primary" :disabled="removing" @click="chat">
           {{ t('Chat about this file') }}
         </button>
@@ -256,6 +355,9 @@ onBeforeUnmount(onCloudStatusInvalidated(() => void load()))
   padding: 12px 14px;
   border-bottom: 1px solid var(--color-border, #ddd);
 }
+.synaplan-tab-header:last-child {
+  border-bottom: none;
+}
 .synaplan-tab-header.is-ok {
   background: rgba(5, 150, 105, 0.07);
 }
@@ -310,6 +412,24 @@ onBeforeUnmount(onCloudStatusInvalidated(() => void load()))
 .synaplan-tab-empty {
   margin: 0;
   padding: 12px 14px;
+}
+.synaplan-tab-watch {
+  padding: 10px 14px;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: 8px;
+}
+.synaplan-tab-watch-sentence {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.synaplan-tab-watch-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.synaplan-tab-watch-controls .oco-btn {
+  margin: 0;
 }
 .synaplan-tab-actions {
   display: flex;

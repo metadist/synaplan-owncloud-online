@@ -1,14 +1,26 @@
 /**
- * The bird beside each file Synaplan holds in the Files app's lists, and the
- * Synaplan tab of the details view. A plugin of the file lists of the
- * person's own files; it draws nothing until the page heard that Synaplan
- * tells what it made of them.
+ * The bird beside each file Synaplan holds in the Files app's lists, the
+ * watching bird beside each watched folder or file, the line above a watched
+ * folder's list, and the Synaplan tab of the details view. A plugin of the
+ * file lists of the person's own files; it draws nothing until the page heard
+ * that Synaplan tells what it made of them.
  */
 import { createApp, ref, type App } from 'vue'
+import type { CloudWatchSummary } from '../shared/api'
 import FilesSidebarTab from '../components/FilesSidebarTab.vue'
 import { loadFeatures } from '../shared/features'
+import { translate as t } from '../shared/oc'
+import { controlsFor, policyStopped } from '../shared/watchControls'
+import { resumeWatch, setWatchState, stopWatch } from '../shared/watches'
 import { badgeForState, colorForState, glyphMarkup, labelForState } from './glyphs'
-import { onCloudStatusInvalidated, refreshDelay, requestRowStatus, type ResolvedRowStatus } from './statusBatcher'
+import {
+  invalidateCloudStatusCache,
+  onCloudStatusInvalidated,
+  refreshDelay,
+  requestRowStatus,
+  watchForTarget,
+  type ResolvedRowStatus,
+} from './statusBatcher'
 
 export const SIDEBAR_TAB_ID = 'synaplanTabView'
 
@@ -16,42 +28,67 @@ export const SIDEBAR_TAB_ID = 'synaplanTabView'
 export const FILE_LISTS = ['files', 'favorites', 'shares.self', 'shares.others', 'shares.link', 'systemtagsfilter']
 
 const BIRD_CLASS = 'synaplan-row-bird'
+const HEADER_CLASS = 'synaplan-watched-folder-header'
 
 /** The version a row shows, as Synaplan keeps it: the etag without quotes. */
 export function rowVersion(row: Element): string {
   return (row.getAttribute('data-etag') ?? '').replace(/^"|"$/g, '')
 }
 
+/** The state a watch shows as: one the administrator's setting holds reads as stopped. */
+function watchStateOf(watch: CloudWatchSummary | null): string | null {
+  if (!watch) {
+    return null
+  }
+  return watch.policy_off ? 'attention' : watch.state
+}
+
+/** The sentence of a watch, or what the administrator's setting that holds it means. */
+function watchSentence(watch: CloudWatchSummary): string {
+  return watch.policy_off ? policyStopped(watch.policy_off) : watch.sentence
+}
+
 /**
- * Draw the bird of one file row, or none where Synaplan holds nothing of it.
- * Gives the answer it drew from, or null for a row that is no file.
+ * Draw the bird of one row, or none where Synaplan holds nothing of the file
+ * and watches nothing of it. Gives the answer it drew from, or null for a row
+ * that is no file or folder.
  */
 export async function drawBird(fileList: OcFileList, row: HTMLElement): Promise<ResolvedRowStatus | null> {
   const id = row.getAttribute('data-id') ?? ''
   const name = row.getAttribute('data-file') ?? ''
-  if (!/^\d+$/.test(id) || name === '' || row.getAttribute('data-type') === 'dir') {
+  if (!/^\d+$/.test(id) || name === '') {
     return null
   }
   const status = await requestRowStatus(id, rowVersion(row))
   row.querySelector('.' + BIRD_CLASS)?.remove()
   const nameText = row.querySelector('td.filename a.name span.nametext')
   const state = status.item?.state ?? 'none'
-  if (!row.isConnected || !nameText || !status.enabled || status.unreachable || state === 'none') {
+  const watch = status.watch
+  if (!row.isConnected || !nameText || !status.enabled || status.unreachable || (state === 'none' && !watch)) {
     return status
   }
 
   const folder = status.item?.knowledge_folder?.name || status.item?.knowledge_folder?.key || null
-  const label = labelForState(state, folder)
+  const watchState = watchStateOf(watch)
+  const label = labelForState(state, folder, watch ? watchSentence(watch) : null, watchState)
   const bird = document.createElement('span')
   bird.className = BIRD_CLASS
   bird.setAttribute('data-testid', 'synaplan-row-bird')
   bird.setAttribute('data-synaplan-state', state)
+  if (watch) {
+    bird.setAttribute('data-synaplan-watch', watchState ?? '')
+  }
   bird.setAttribute('role', 'button')
   bird.setAttribute('tabindex', '0')
   bird.setAttribute('title', label)
   bird.setAttribute('aria-label', label)
-  bird.style.cssText = `position:relative;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:20px;height:20px;margin:0 6px;cursor:pointer;color:${colorForState(state)}`
-  bird.innerHTML = glyphMarkup({ badge: badgeForState(state), size: 16, overrides: status.glyphs })
+  bird.style.cssText = `position:relative;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:20px;height:20px;margin:0 6px;cursor:pointer;color:${colorForState(state, watchState)}`
+  bird.innerHTML = glyphMarkup({
+    eyes: watch !== null,
+    badge: badgeForState(state, watchState),
+    size: 16,
+    overrides: status.glyphs,
+  })
 
   const open = (event: Event): void => {
     event.preventDefault()
@@ -131,7 +168,106 @@ function drawBirds(fileList: OcFileList, rows: ArrayLike<unknown>): void {
   }
 }
 
-/** The Synaplan tab of the details view, for files: folders have nothing Synaplan holds yet. */
+/**
+ * The line above the list of a watched folder: what the watch does, and
+ * Pause, Resume and Stop. The open folder is no row of its list, so the
+ * details view cannot show it.
+ */
+async function drawHeader(fileList: OcFileList, header: HTMLElement): Promise<void> {
+  const folderId = String(fileList.dirInfo?.id ?? '')
+  header.dataset.folder = folderId
+  if (!/^\d+$/.test(folderId)) {
+    header.replaceChildren()
+    header.style.display = 'none'
+    return
+  }
+  const status = await requestRowStatus(folderId, String(fileList.dirInfo?.etag ?? '').replace(/^"|"$/g, ''))
+  if (header.dataset.folder !== folderId) {
+    return
+  }
+  const watch = status.enabled && !status.unreachable ? (status.watch ?? watchForTarget(folderId)) : null
+  header.replaceChildren()
+  if (!watch) {
+    header.style.display = 'none'
+    return
+  }
+  header.style.display = 'flex'
+
+  const watchState = watchStateOf(watch)
+  const icon = document.createElement('span')
+  icon.className = 'synaplan-watched-folder-icon'
+  icon.style.color = colorForState('none', watchState)
+  icon.innerHTML = glyphMarkup({ eyes: true, badge: badgeForState('none', watchState), size: 16 })
+
+  const text = document.createElement('span')
+  text.setAttribute('data-testid', 'synaplan-watched-folder-sentence')
+  text.textContent = watchSentence(watch)
+
+  const controls = controlsFor(watch.state, watch.policy_off)
+  const name = fileList.dirInfo?.name || '/'
+  const button = (label: string, testId: string, act: () => Promise<unknown>): HTMLButtonElement => {
+    const control = document.createElement('button')
+    control.type = 'button'
+    control.className = 'synaplan-watched-folder-control'
+    control.setAttribute('data-testid', testId)
+    control.textContent = label
+    control.addEventListener('click', () => {
+      control.disabled = true
+      void act().then((changed) => {
+        control.disabled = false
+        if (changed) {
+          invalidateCloudStatusCache()
+        }
+      })
+    })
+    return control
+  }
+  const buttons: HTMLButtonElement[] = []
+  if (controls.pause) {
+    buttons.push(button(t('Pause'), 'synaplan-watched-folder-pause', () => setWatchState(watch.id, 'paused')))
+  }
+  if (controls.resume) {
+    buttons.push(button(t('Resume'), 'synaplan-watched-folder-resume', () => resumeWatch(watch.id)))
+  }
+  if (controls.stop) {
+    buttons.push(button(t('Stop watching'), 'synaplan-watched-folder-stop', () => stopWatch(watch.id, name)))
+  }
+  if (buttons[0]) {
+    buttons[0].style.marginLeft = 'auto'
+  }
+
+  header.append(icon, text, ...buttons)
+}
+
+function watchedFolderHeader(fileList: OcFileList): HTMLElement | null {
+  const table = fileList.$table?.[0]
+  if (!table?.parentElement) {
+    return null
+  }
+  const header = document.createElement('div')
+  header.className = HEADER_CLASS
+  header.setAttribute('data-testid', HEADER_CLASS)
+  header.style.display = 'none'
+  table.parentElement.insertBefore(header, table)
+  injectHeaderStyles()
+  return header
+}
+
+function injectHeaderStyles(): void {
+  if (document.getElementById('synaplan-watched-folder-styles')) {
+    return
+  }
+  const style = document.createElement('style')
+  style.id = 'synaplan-watched-folder-styles'
+  style.textContent = `
+.${HEADER_CLASS} { align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--color-border, #ddd); background: var(--color-background-dark, #f5f5f5); }
+.synaplan-watched-folder-icon { position: relative; display: inline-flex; align-items: center; }
+.synaplan-watched-folder-control { margin: 0; padding: 2px 8px; background: transparent; border: none; font-weight: 600; color: var(--color-primary, #1a67a3); cursor: pointer; }
+`
+  document.head.appendChild(style)
+}
+
+/** The Synaplan tab of the details view, for files and folders. */
 function sidebarTab(): unknown {
   const DetailTabView = OCA.Files?.DetailTabView
   if (!DetailTabView) {
@@ -145,7 +281,7 @@ function sidebarTab(): unknown {
     className: 'tab ' + SIDEBAR_TAB_ID,
     order: 50,
     getLabel: () => 'Synaplan',
-    canDisplay: (fileInfo?: OcFileInfoModel | null) => Boolean(fileInfo) && fileInfo?.get('type') !== 'dir',
+    canDisplay: (fileInfo?: OcFileInfoModel | null) => Boolean(fileInfo),
     render(this: { model?: OcFileInfoModel | null; el: HTMLElement }) {
       fileId.value = Number(this.model?.get('id') ?? 0) || 0
       fileName.value = String(this.model?.get('name') ?? '')
@@ -175,10 +311,18 @@ function attach(fileList: OcFileList): void {
     if (tab) {
       fileList.registerTabView?.(tab)
     }
+    const header = watchedFolderHeader(fileList)
+    if (header) {
+      fileList.$el?.on('afterChangeDirectory', () => void drawHeader(fileList, header))
+      void drawHeader(fileList, header)
+    }
     onCloudStatusInvalidated(() => {
       const rows = fileList.$fileList?.children('tr')
       if (rows) {
         drawBirds(fileList, rows.toArray())
+      }
+      if (header) {
+        void drawHeader(fileList, header)
       }
     })
   })

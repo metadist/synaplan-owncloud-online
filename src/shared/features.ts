@@ -5,7 +5,14 @@
  */
 import { api, type Features } from './api'
 
-const NOTHING: Features = { translation: false, read_folders: false, file_state: false, follows_changes: false }
+const NOTHING: Features = {
+  translation: false,
+  read_folders: false,
+  file_state: false,
+  follows_changes: false,
+  watches: false,
+  watch_shared: false,
+}
 
 let asked: Promise<Features> | null = null
 
@@ -16,6 +23,8 @@ export function loadFeatures(): Promise<Features> {
       read_folders: features.read_folders === true,
       file_state: features.file_state === true,
       follows_changes: features.follows_changes === true,
+      watches: features.watches === true,
+      watch_shared: features.watches === true && features.watch_shared === true,
     }),
     () => NOTHING,
   )

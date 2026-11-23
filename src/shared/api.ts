@@ -66,6 +66,10 @@ export interface Settings {
   delivery_url_default: string
   read_scope_ceiling: ReadMode
   read_folder_cap: number
+  watch_folders: boolean
+  watch_shared_folders: boolean
+  /** How ownCloud.online runs its background jobs; watched folders move on with them. */
+  background_jobs_mode: 'ajax' | 'webcron' | 'cron'
 }
 
 /** What a person lets Synaplan read, from the narrowest choice to the widest. */
@@ -158,6 +162,10 @@ export interface Features {
   file_state: boolean
   /** Synaplan hears about changed, moved, deleted and restored files: "Keep it up to date". */
   follows_changes: boolean
+  /** Synaplan watches folders and files, and the administrator allows it. */
+  watches: boolean
+  /** Shared folders and files may be watched too. */
+  watch_shared: boolean
 }
 
 export type CloudFileStateCode = 'searchable' | 'adding' | 'updating' | 'changed' | 'failed' | 'none'
@@ -166,6 +174,55 @@ export type CloudFileStateCode = 'searchable' | 'adding' | 'updating' | 'changed
 export interface GlyphOverrides {
   bird?: string | null
   bird_eyes?: string | null
+}
+
+/** The administrator's setting that holds a watch, if one does. */
+export type PolicyOff = 'watches' | 'shared'
+
+/** A watch on a folder or file of the view, as Synaplan tells it with the state of the files. */
+export interface CloudWatchSummary {
+  id: number
+  target_id: string
+  sentence: string
+  state: string
+  policy_off?: PolicyOff
+}
+
+/** One of the person's watches, as the app lists it. */
+export interface WatchRow {
+  id: number
+  kind: 'folder' | 'file'
+  targetId: string
+  name: string
+  state: string
+  sentence: string
+  lastRunAt: number | null
+  policyOff: PolicyOff | null
+  openUrl: string
+}
+
+export interface WatchTask {
+  id: number
+  name: string
+}
+
+export interface WatchOptions {
+  success: boolean
+  /** The files already in the folder. */
+  existing?: number
+  /** Whether background jobs run on a schedule rather than with page views. */
+  jobsOnSchedule?: boolean
+  tasks?: unknown[]
+  folders?: unknown[]
+}
+
+export interface WatchStart {
+  targetKind: 'folder' | 'file'
+  targetId: string
+  preset: 'keep_searchable' | 'task'
+  taskId?: number
+  groupKey?: string
+  backfill?: boolean
 }
 
 /** What Synaplan made of one file of a folder view. */
@@ -182,6 +239,7 @@ export interface CloudStatusAnswer {
   enabled: boolean
   unreachable?: boolean
   items: CloudStatusItem[]
+  watches?: CloudWatchSummary[]
   glyphs?: GlyphOverrides
   openSynaplanUrl?: string
 }
@@ -199,6 +257,7 @@ export interface CloudFileDetail {
   knowledgeFolder?: string | null
   keptUpToDate?: boolean
   synaplanFileId?: number | null
+  watches?: CloudWatchSummary[]
   glyphs?: GlyphOverrides
   openSynaplanUrl?: string
 }
@@ -225,6 +284,21 @@ export const api = {
 
   searchableFiles: () =>
     apiFetch<{ success: boolean; files: SearchableFile[]; openSynaplanUrl?: string }>('/api/v1/cloud/searchable'),
+
+  watchOptions: (targetId?: string) =>
+    apiFetch<WatchOptions>(
+      '/api/v1/watches/options' + (targetId ? '?' + new URLSearchParams({ targetId }).toString() : ''),
+    ),
+  startWatch: (body: WatchStart) => apiFetch<{ success: boolean }>('/api/v1/watches', { method: 'POST', body }),
+  listWatches: () => apiFetch<{ success: boolean; watches: WatchRow[] }>('/api/v1/watches'),
+  watchWaiting: (id: number) =>
+    apiFetch<{ success: boolean; waiting: number; ask: boolean }>(`/api/v1/watches/${id}/waiting`),
+  setWatchState: (id: number, state: 'paused' | 'active', handleWaiting?: boolean) =>
+    apiFetch<{ success: boolean; watch: WatchRow }>(`/api/v1/watches/${id}`, {
+      method: 'PATCH',
+      body: state === 'active' ? { state, handleWaiting: handleWaiting ?? true } : { state },
+    }),
+  stopWatch: (id: number) => apiFetch<{ success: boolean }>(`/api/v1/watches/${id}`, { method: 'DELETE' }),
 
   getGroups: () => apiFetch<{ success: boolean; groups: FileGroup[] }>('/api/v1/knowledge/groups'),
 

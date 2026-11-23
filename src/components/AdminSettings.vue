@@ -11,7 +11,7 @@ import {
 } from '../shared/api'
 import { failureFromError } from '../shared/failures'
 import { LANGUAGES } from '../shared/languages'
-import { APP_NAME, notify, translate as t } from '../shared/oc'
+import { APP_NAME, backgroundJobsSettingsUrl, notify, translate as t } from '../shared/oc'
 import AdminRegistration from './AdminRegistration.vue'
 
 const loaded = ref(false)
@@ -45,6 +45,10 @@ const deliveryUrl = ref('')
 const deliveryUrlDefault = ref('')
 const readCeiling = ref<ReadMode>('allowed')
 const readFolderCap = ref(20)
+const watchFolders = ref(true)
+const watchSharedFolders = ref(true)
+const jobsMode = ref<Settings['background_jobs_mode']>('cron')
+const jobsSettingsUrl = backgroundJobsSettingsUrl()
 
 const aiUsers = ref<AiUser[]>([])
 const aiUsersLoading = ref(false)
@@ -96,6 +100,10 @@ function apply(s: Settings): void {
   deliveryUrlDefault.value = s.delivery_url_default || ''
   readCeiling.value = s.read_scope_ceiling || 'allowed'
   readFolderCap.value = s.read_folder_cap || 20
+  watchFolders.value = s.watch_folders !== false
+  watchSharedFolders.value = s.watch_shared_folders !== false
+  jobsMode.value =
+    s.background_jobs_mode === 'ajax' || s.background_jobs_mode === 'webcron' ? s.background_jobs_mode : 'cron'
 }
 
 onMounted(async () => {
@@ -145,6 +153,8 @@ async function save(): Promise<void> {
       link_auto_provision: linkAutoProvision.value,
       read_scope_ceiling: readCeiling.value,
       read_folder_cap: Number(readFolderCap.value) || 20,
+      watch_folders: watchFolders.value,
+      watch_shared_folders: watchSharedFolders.value,
     }
     if (mode.value === 'link' || mode.value === 'provision') {
       body.delivery_url = deliveryUrl.value.trim()
@@ -277,6 +287,17 @@ function formatConsentDate(iso: string | null | undefined): string {
 <template>
   <div v-if="loaded" class="synaplan-admin">
     <h2>{{ t('Synaplan Integration') }}</h2>
+
+    <p v-if="jobsMode === 'ajax'" class="synaplan-admin-jobs is-warning" data-testid="synaplan-admin-jobs-note">
+      {{ t('Background jobs run only when someone opens a page.') }}
+      {{ t('Watched folders need background jobs that run on a schedule.') }}
+      <a :href="jobsSettingsUrl">{{ t('How to set it up') }}</a>
+    </p>
+    <p v-else-if="jobsMode === 'webcron'" class="synaplan-admin-jobs" data-testid="synaplan-admin-jobs-note">
+      {{ t('Background jobs run only as often as an outside service calls this {app}.', { app: APP_NAME }) }}
+      {{ t('Watched folders get new files only that often, so have it call every 5 minutes.') }}
+      <a :href="jobsSettingsUrl">{{ t('How to set it up') }}</a>
+    </p>
 
     <div class="synaplan-admin-field">
       <label for="synaplan-active-env">{{ t('Active environment') }}</label>
@@ -433,6 +454,33 @@ function formatConsentDate(iso: string | null | undefined): string {
       <p class="oco-sub">{{ t('How many folders one person may name for Synaplan to read.') }}</p>
     </template>
 
+    <label class="synaplan-admin-check">
+      <input v-model="watchFolders" type="checkbox" :disabled="saving" data-testid="synaplan-admin-watch-folders" />
+      <span>
+        {{ t('Allow watching folders') }}
+        <span class="oco-sub">{{
+          t(
+            'When this is off, nobody can start watching a folder or file, the watches already running stop, and Synaplan no longer offers watching for this {app}.',
+            { app: APP_NAME },
+          )
+        }}</span>
+      </span>
+    </label>
+    <label class="synaplan-admin-check">
+      <input
+        v-model="watchSharedFolders"
+        type="checkbox"
+        :disabled="saving || !watchFolders"
+        data-testid="synaplan-admin-watch-shared"
+      />
+      <span>
+        {{ t('Allow watching shared folders') }}
+        <span class="oco-sub">{{
+          t('When this is off, nobody can start watching a shared folder or file, and the watches already on one stop.')
+        }}</span>
+      </span>
+    </label>
+
     <div class="synaplan-admin-actions">
       <button class="oco-btn primary" :disabled="saving" @click="save">{{ saving ? t('Saving…') : t('Save') }}</button>
       <button class="oco-btn" :disabled="testing" @click="testConnection">{{ t('Test connection') }}</button>
@@ -536,6 +584,20 @@ function formatConsentDate(iso: string | null | undefined): string {
   border-radius: var(--border-radius, 3px);
   background: var(--color-main-background, #fff);
   color: var(--color-main-text, #222);
+}
+.synaplan-admin-jobs {
+  max-width: 640px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #ddd);
+  border-left: 4px solid #0284c7;
+}
+.synaplan-admin-jobs.is-warning {
+  border-left-color: #b45309;
+}
+.synaplan-admin-jobs a {
+  font-weight: 600;
+  text-decoration: underline;
 }
 .synaplan-admin-check {
   display: flex;

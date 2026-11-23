@@ -11,6 +11,8 @@ vi.mock('../../../src/components/FilesSidebarTab.vue', async () => {
   }
 })
 
+vi.mock('../../../src/components/QuestionModal.vue', () => ({ default: {} }))
+
 type Plugin = { attach: (fileList: OcFileList) => void }
 type TabView = {
   el: HTMLElement
@@ -22,6 +24,7 @@ type TabView = {
 
 let features: Record<string, boolean>
 let states: Record<string, string>
+let watched: Record<string, { id: number; state: string; sentence: string; policy_off?: string }>
 let reachable: boolean
 let fetch: ReturnType<typeof vi.fn>
 let plugins: Array<[string, Plugin]>
@@ -52,9 +55,28 @@ function fileList(id = 'files') {
   const body = document.createElement('tbody')
   document.body.appendChild(body)
   const handlers: Array<(event: { $files?: ArrayLike<unknown> }) => void> = []
+  const table = document.createElement('table')
+  const wrapper = document.createElement('div')
+  wrapper.appendChild(table)
+  document.body.appendChild(wrapper)
+  const folderChanged: Array<(event: { fileId?: number | string }) => void> = []
   return {
     id,
     body,
+    $table: [table],
+    dirInfo: {} as { id?: number; etag?: string; name?: string },
+    $el: {
+      on: (event: string, handler: (event: { fileId?: number | string }) => void) => {
+        if (event === 'afterChangeDirectory') {
+          folderChanged.push(handler)
+        }
+      },
+    },
+    /** The Files app opened another folder. */
+    opened(id: number, name: string) {
+      this.dirInfo = { id, etag: `"etag-${id}"`, name }
+      folderChanged.forEach((handler) => handler({ fileId: id }))
+    },
     $fileList: {
       on: (event: string, handler: (event: { $files?: ArrayLike<unknown> }) => void) => {
         if (event === 'fileActionsReady') {
@@ -109,6 +131,7 @@ async function plugin(): Promise<Plugin> {
 beforeEach(() => {
   features = { translation: false, read_folders: false, file_state: true, follows_changes: true }
   states = { '7': 'searchable' }
+  watched = {}
   reachable = true
   plugins = []
   fetch = vi.fn(async (url: string, init: RequestInit) => {
@@ -123,6 +146,7 @@ beforeEach(() => {
       items: items
         .filter(({ id }) => states[id])
         .map(({ id }) => ({ id, state: states[id], knowledge_folder: { key: 'Contracts', name: 'Contracts' } })),
+      watches: items.filter(({ id }) => watched[id]).map(({ id }) => ({ target_id: id, ...watched[id] })),
       glyphs: {},
       openSynaplanUrl: 'https://synaplan.example.org/files',
     })
@@ -198,7 +222,7 @@ describe('the bird in the Files list', () => {
     expect(list.showDetailsView).toHaveBeenCalledTimes(2)
   })
 
-  it('is not drawn for files Synaplan does not hold, nor for folders', async () => {
+  it('is not drawn for files Synaplan does not hold, nor for folders nobody watches', async () => {
     const list = fileList()
     ;(await plugin()).attach(list)
     const folder = row(list, '5', 'Projects', 'dir')
@@ -209,12 +233,61 @@ describe('the bird in the Files list', () => {
     await vi.waitFor(() => expect(bird(tr)).not.toBeNull())
     expect(statusRequests()).toEqual([
       [
+        { id: '5', version: 'etag-5' },
         { id: '6', version: 'etag-6' },
         { id: '7', version: 'etag-7' },
       ],
     ])
     expect(bird(folder)).toBeNull()
     expect(bird(other)).toBeNull()
+  })
+
+  it('has open eyes beside a watched folder and says what the watch does', async () => {
+    watched = { '5': { id: 11, state: 'active', sentence: 'New files become searchable by AI.' } }
+    const list = fileList()
+    ;(await plugin()).attach(list)
+    const folder = row(list, '5', 'Projects', 'dir')
+    list.rendered([folder])
+
+    await vi.waitFor(() => expect(bird(folder)).not.toBeNull())
+    const glyph = bird(folder) as HTMLElement
+    expect(glyph.getAttribute('data-synaplan-watch')).toBe('active')
+    expect(glyph.getAttribute('title')).toBe('New files become searchable by AI.')
+    expect(glyph.innerHTML).toContain('fill:#fff')
+  })
+
+  it('tells of a paused watch before the file, and of one the administrator stopped', async () => {
+    watched = {
+      '7': { id: 11, state: 'paused', sentence: 'New versions become searchable by AI.' },
+      '5': { id: 12, state: 'active', sentence: 'New files become searchable by AI.', policy_off: 'shared' },
+    }
+    const list = fileList()
+    ;(await plugin()).attach(list)
+    const tr = row(list, '7', 'plan.docx')
+    const folder = row(list, '5', 'Shared', 'dir')
+    list.rendered([tr, folder])
+
+    await vi.waitFor(() => expect(bird(folder)).not.toBeNull())
+    expect(bird(tr)?.getAttribute('title')).toBe('Watching paused — open to resume · Searchable by AI — in “Contracts”')
+    expect(bird(tr)?.getAttribute('data-synaplan-watch')).toBe('paused')
+    expect(bird(folder)?.getAttribute('title')).toBe('Watching stopped — open to see why')
+    expect(bird(folder)?.getAttribute('data-synaplan-watch')).toBe('attention')
+  })
+
+  it('loses its eyes once the watch is stopped', async () => {
+    watched = { '5': { id: 11, state: 'active', sentence: 'New files become searchable by AI.' } }
+    const list = fileList()
+    ;(await plugin()).attach(list)
+    const folder = row(list, '5', 'Projects', 'dir')
+    list.rendered([folder])
+    await vi.waitFor(() => expect(bird(folder)).not.toBeNull())
+
+    watched = {}
+    const { invalidateCloudStatusCache, watchForTarget } = await import('../../../src/cloud_state/statusBatcher')
+    invalidateCloudStatusCache()
+
+    await vi.waitFor(() => expect(bird(folder)).toBeNull())
+    expect(watchForTarget('5')).toBeNull()
   })
 
   it('is not drawn while Synaplan cannot be reached', async () => {
@@ -368,8 +441,41 @@ describe('a bird Synaplan is still at work on', () => {
   })
 })
 
+describe('the line above a watched folder', () => {
+  const header = (): HTMLElement | null => document.querySelector('[data-testid="synaplan-watched-folder-header"]')
+
+  it('says what the watch on the open folder does, with its controls', async () => {
+    watched = { '3': { id: 11, state: 'active', sentence: 'Synaplan makes new files searchable by AI.' } }
+    const list = fileList()
+    list.dirInfo = { id: 3, etag: '"etag-3"', name: 'Incoming' }
+    ;(await plugin()).attach(list)
+
+    await vi.waitFor(() => expect(header()?.style.display).toBe('flex'))
+    expect(header()?.nextElementSibling).toBe(list.$table[0])
+    expect(header()?.textContent).toContain('Synaplan makes new files searchable by AI.')
+    expect(header()?.querySelector('[data-testid="synaplan-watched-folder-pause"]')).not.toBeNull()
+    expect(header()?.querySelector('[data-testid="synaplan-watched-folder-resume"]')).toBeNull()
+    expect(header()?.querySelector('[data-testid="synaplan-watched-folder-stop"]')).not.toBeNull()
+  })
+
+  it('goes for a folder nobody watches, and comes back for a watched one', async () => {
+    watched = { '4': { id: 12, state: 'paused', sentence: 'Watching paused.' } }
+    const list = fileList()
+    list.dirInfo = { id: 3, etag: '"etag-3"', name: 'Incoming' }
+    ;(await plugin()).attach(list)
+    await vi.waitFor(() => expect(statusRequests().length).toBeGreaterThan(0))
+    expect(header()?.style.display).toBe('none')
+
+    list.opened(4, 'Contracts')
+
+    await vi.waitFor(() => expect(header()?.style.display).toBe('flex'))
+    expect(header()?.querySelector('[data-testid="synaplan-watched-folder-resume"]')).not.toBeNull()
+    expect(header()?.querySelector('[data-testid="synaplan-watched-folder-pause"]')).toBeNull()
+  })
+})
+
 describe('the Synaplan tab', () => {
-  it('is added to the details view, for files', async () => {
+  it('is added to the details view, for files and folders', async () => {
     const list = fileList()
     ;(await plugin()).attach(list)
     await vi.waitFor(() => expect(list.registerTabView).toHaveBeenCalledTimes(1))
@@ -381,7 +487,7 @@ describe('the Synaplan tab', () => {
     expect(tab.id).toBe('synaplanTabView')
     expect(tab.getLabel()).toBe('Synaplan')
     expect(tab.canDisplay(info('file', 7, 'plan.docx'))).toBe(true)
-    expect(tab.canDisplay(info('dir', 5, 'Projects'))).toBe(false)
+    expect(tab.canDisplay(info('dir', 5, 'Projects'))).toBe(true)
     expect(tab.canDisplay(null)).toBe(false)
 
     tab.setFileInfo(info('file', 7, 'plan.docx'))
