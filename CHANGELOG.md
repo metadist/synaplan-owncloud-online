@@ -45,6 +45,45 @@ All notable changes to this project are documented here. The format is based on
   for a Synaplan that reaches this server at another address than people use.
 - Notices from Synaplan are signed and checked; a connection that ended in
   Synaplan asks the person to connect again on their next action.
+- **What may Synaplan read in your ownCloud.online?** in Settings → Personal →
+  Synaplan: **Only what I watch**, **Also folders I allow** with the folders
+  and **Add a folder**, or **All my files** with its warning. **Let Synaplan
+  read this folder** in a folder's … menu in Files adds it. A folder stays
+  allowed when it is renamed or moved. When a Synaplan task needs files from
+  a folder Synaplan may read, the app lists the folder and sends the files
+  Synaplan asks for, with the person's own credential.
+- **Synaplan may read at most** in the admin screen, beside **Folders one
+  person may allow**: watched folders, folders people allow (the default) or
+  all their files. Lowering it narrows everyone who chose more, and Synaplan
+  learns it within the hour; raising it widens nobody.
+- The read setting and **Let Synaplan read this folder** show only where
+  Synaplan offers folder reads. While Synaplan gives no answer, its last
+  answer of the past day stands in.
+- **A bird after the name of each file Synaplan holds** says whether it is
+  searchable by AI, being made searchable or updated, changed since, or could
+  not be made searchable, and asks again while Synaplan is at work on it. It
+  opens the file's **Synaplan** tab: who owns it, who else can use it, what
+  it touches and where it came from, with **Chat about this file**,
+  **Update**, **Remove from Synaplan** and **Open in Synaplan**. Each person
+  sees their own state.
+- The research page lists the newest hundred files Synaplan holds from this
+  ownCloud.online, once Synaplan's file list says which file here each one
+  came from.
+- **Keep it up to date** in **Make searchable by AI**, on unless turned off:
+  Synaplan takes each new version of the file, and "If you delete the file
+  here, Synaplan forgets it too."
+- Synaplan hears when a file changes, moves, goes to the trash or comes back,
+  in the order it happened: for the person it happened to and, for a shared
+  file, its owner and everyone it is shared with who holds a Synaplan
+  connection, each at the path they see. A folder takes the files inside it
+  along. Removing a share from your files, or declining it, deletes your
+  copies of what it held, except what you still reach through another share.
+  An event or a new version that cannot go yet is tried again after 1, 5, 15
+  and 60 minutes.
+- The bird, the tab and the list show only with a personal Synaplan account
+  and while Synaplan offers file states; **Keep it up to date** and the
+  change reports also need this server registered and Synaplan to take them.
+  The app's upgrade adds the table changes wait in.
 
 ### Changed
 
@@ -54,6 +93,9 @@ All notable changes to this project are documented here. The format is based on
   can read.
 - Keys are stored encrypted. A key 1.0.0 stored in plain text is encrypted on
   first use.
+- Make searchable by AI, summaries and translations send a file's path without
+  a leading slash, as changes and new versions do, so a file keeps one name in
+  Synaplan.
 
 ### Fixed
 
@@ -62,6 +104,11 @@ All notable changes to this project are documented here. The format is based on
 - Chat answers render Markdown without running HTML from the answer.
 - Saving or showing generated media only fetches paths on the Synaplan host, so
   the key is never sent to another server.
+- People with a user id over 37 characters, such as a long email address, keep
+  their Synaplan connection once it has to be renewed, and can disconnect and
+  withdraw consent. Without a locking cache, ownCloud.online refuses lock names
+  over 64 characters, and the lock that renews a connection was named with the
+  whole user id.
 
 ## [1.0.0] - 2026-07-15
 
