@@ -205,6 +205,23 @@ describe('the watches of the rows', () => {
     await other
     expect(watchForTarget('30')).toEqual(watch)
   })
+
+  it.each([
+    ['cannot be reached', { enabled: true, unreachable: true }],
+    ['has its cloud files off', { enabled: false }],
+  ])('keeps the watch while Synaplan %s, as such an answer lists none', async (_, state) => {
+    const { requestRowStatus, watchForTarget } = await batcher()
+    answer = withWatches([watch])
+    const first = requestRowStatus('30', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    await first
+
+    answer = () => Response.json({ success: true, items: [], watches: [], ...state })
+    const later = requestRowStatus('30', 'e2')
+    await vi.advanceTimersByTimeAsync(50)
+    await later
+    expect(watchForTarget('30')).toEqual(watch)
+  })
 })
 
 describe('an answer asked for before the person changed what Synaplan holds', () => {

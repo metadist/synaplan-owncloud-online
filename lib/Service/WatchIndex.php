@@ -25,14 +25,14 @@ use OCP\IDBConnection;
  * before it existed already and only goes in when the person asked for the
  * files already there (0).
  *
- * @phpstan-type WatchRow array{id: int, uid: string, kind: string, target: int, state: string, since: int, reconciled: int}
+ * @phpstan-type WatchRow array{id: int, uid: string, kind: string, target: int, state: string, reason: string, since: int, reconciled: int}
  * @phpstan-type QueueRow array{watch: int, file: int, event: string, changed: int, generation: string, attempts: int}
  */
 class WatchIndex
 {
     public const ACTIVE = 'active';
     public const PAUSED = 'paused';
-    /** Synaplan's `attention` with the reason `target_gone`: the watch lost its folder or file. */
+    public const ATTENTION = 'attention';
     public const TARGET_GONE = 'target_gone';
     public const TABLE = 'synaplan_watches';
     public const QUEUE = 'synaplan_watch_queue';
@@ -424,7 +424,7 @@ class WatchIndex
 
     /**
      * @param array<mixed> $watch
-     * @return array{id: int, kind: string, target: int, state: string}|null
+     * @return array{id: int, kind: string, target: int, state: string, reason: string}|null
      */
     public static function parse(array $watch): ?array
     {
@@ -432,6 +432,7 @@ class WatchIndex
         $kind = $watch['target_kind'] ?? null;
         $target = $watch['target_id'] ?? null;
         $state = $watch['state'] ?? null;
+        $reason = $watch['reason'] ?? null;
         if (is_string($id) && ctype_digit($id)) {
             $id = (int) $id;
         }
@@ -445,15 +446,24 @@ class WatchIndex
             return null;
         }
 
-        if ($state === 'attention' && ($watch['reason'] ?? null) === self::TARGET_GONE) {
-            $state = self::TARGET_GONE;
-        }
+        $reason = is_string($reason) && strlen($reason) <= 32 ? $reason : '';
 
-        return ['id' => $id, 'kind' => $kind, 'target' => (int) $target, 'state' => $state];
+        return ['id' => $id, 'kind' => $kind, 'target' => (int) $target, 'state' => $state, 'reason' => $reason];
     }
 
     /**
-     * @param array{id: int, kind: string, target: int, state: string} $row
+     * Whether Synaplan holds this watch because its target is gone: only
+     * then does it take a restored target back.
+     *
+     * @param array{state: string, reason: string} $watch
+     */
+    public static function targetGone(array $watch): bool
+    {
+        return $watch['state'] === self::ATTENTION && $watch['reason'] === self::TARGET_GONE;
+    }
+
+    /**
+     * @param array{id: int, kind: string, target: int, state: string, reason: string} $row
      */
     private function upsert(string $uid, array $row, int $since, bool $replaceSince): void
     {
@@ -466,6 +476,7 @@ class WatchIndex
                 'target_kind' => $insert->createNamedParameter($row['kind']),
                 'target_id' => $insert->createNamedParameter($row['target'], IQueryBuilder::PARAM_INT),
                 'state' => $insert->createNamedParameter($row['state']),
+                'reason' => $insert->createNamedParameter($row['reason']),
                 'since' => $insert->createNamedParameter($since, IQueryBuilder::PARAM_INT),
                 'reconciled' => $insert->createNamedParameter(0, IQueryBuilder::PARAM_INT),
             ]);
@@ -483,6 +494,7 @@ class WatchIndex
             ->set('target_kind', $update->createNamedParameter($row['kind']))
             ->set('target_id', $update->createNamedParameter($row['target'], IQueryBuilder::PARAM_INT))
             ->set('state', $update->createNamedParameter($row['state']))
+            ->set('reason', $update->createNamedParameter($row['reason']))
             ->where($update->expr()->eq('watch_id', $update->createNamedParameter($row['id'], IQueryBuilder::PARAM_INT)));
         if ($replaceSince) {
             $update->set('since', $update->createNamedParameter($since, IQueryBuilder::PARAM_INT));
@@ -548,6 +560,7 @@ class WatchIndex
                 'kind' => (string) ($row['target_kind'] ?? ''),
                 'target' => (int) ($row['target_id'] ?? 0),
                 'state' => (string) ($row['state'] ?? ''),
+                'reason' => (string) ($row['reason'] ?? ''),
                 'since' => (int) ($row['since'] ?? 0),
                 'reconciled' => (int) ($row['reconciled'] ?? 0),
             ];

@@ -9,6 +9,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use OCA\oco_synaplan\Migrations\Version20261124000000;
+use OCA\oco_synaplan\Migrations\Version20261124010000;
 use PHPUnit\Framework\TestCase;
 
 final class WatchTablesTest extends TestCase
@@ -64,6 +65,29 @@ final class WatchTablesTest extends TestCase
         foreach (['oc_synaplan_watches', 'oc_synaplan_watch_queue', 'oc_synaplan_own_writes'] as $name) {
             self::assertSame(['watch_id'], array_keys($schema->getTable($name)->getColumns()), $name);
         }
+    }
+
+    public function testAWatchKeepsWhySynaplanHoldsIt(): void
+    {
+        $schema = new Schema();
+        (new Version20261124000000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        (new Version20261124010000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+        (new Version20261124010000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        $reason = $schema->getTable('oc_synaplan_watches')->getColumn('reason');
+        self::assertSame(Types::STRING, Type::lookupName($reason->getType()));
+        self::assertFalse($reason->getNotnull(), 'watches noted before it have none');
+        self::assertSame(32, $reason->getLength());
+    }
+
+    public function testWithoutTheWatchesTableTheReasonWaits(): void
+    {
+        $schema = new Schema();
+
+        (new Version20261124010000())->changeSchema($schema, ['tablePrefix' => 'oc_']);
+
+        self::assertFalse($schema->hasTable('oc_synaplan_watches'));
     }
 
     /**

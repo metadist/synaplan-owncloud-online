@@ -549,8 +549,8 @@ final class ReadScopeTest extends TestCase
     {
         $watches = $this->createStub(WatchIndex::class);
         $watches->method('rowsOf')->willReturn([
-            ['id' => 5, 'uid' => 'ada', 'kind' => 'folder', 'target' => 30, 'state' => 'active', 'since' => 0, 'reconciled' => 0],
-            ['id' => 6, 'uid' => 'ada', 'kind' => 'file', 'target' => 31, 'state' => 'active', 'since' => 0, 'reconciled' => 0],
+            ['id' => 5, 'uid' => 'ada', 'kind' => 'folder', 'target' => 30, 'state' => 'active', 'reason' => '', 'since' => 0, 'reconciled' => 0],
+            ['id' => 6, 'uid' => 'ada', 'kind' => 'file', 'target' => 31, 'state' => 'active', 'reason' => '', 'since' => 0, 'reconciled' => 0],
         ]);
 
         return $watches;

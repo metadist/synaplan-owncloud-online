@@ -167,7 +167,7 @@ class WatchEventListener
             }
             $due = $event === 'deleted'
                 ? $watch['state'] === WatchIndex::ACTIVE
-                : $watch['state'] === WatchIndex::TARGET_GONE;
+                : WatchIndex::targetGone($watch);
             if ($due) {
                 $this->index->enqueue($watch['id'], $id, $event, $this->time->getTime());
             } elseif ($event === 'restored') {
