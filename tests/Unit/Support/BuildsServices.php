@@ -7,6 +7,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Support;
 use Doctrine\DBAL\Cache\ArrayResult;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Result;
+use OCA\OcoSynaplan\Service\CloudStateService;
 use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\NotifyKeyCache;
 use OCA\OcoSynaplan\Service\OAuthClient;
@@ -15,6 +16,7 @@ use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchIndex;
 use OCP\App\IAppManager;
 use OCP\DB\QueryBuilder\IExpressionBuilder;
 use OCP\DB\QueryBuilder\IQueryBuilder;
@@ -157,6 +159,18 @@ trait BuildsServices
         );
     }
 
+    protected function cloudState(): CloudStateService
+    {
+        return $this->built['cloudState'] ??= new CloudStateService(
+            $this->http,
+            $this->synaplanConfig(),
+            $this->client(),
+            $this->links(),
+            $this->cache,
+            $this->logger(),
+        );
+    }
+
     protected function readScope(): ReadScope
     {
         return $this->built['readScope'] ??= new ReadScope(
@@ -165,6 +179,7 @@ trait BuildsServices
             $this->links(),
             $this->root ??= $this->createStub(IRootFolder::class),
             $this->locks(),
+            new WatchIndex($this->db()),
         );
     }
 

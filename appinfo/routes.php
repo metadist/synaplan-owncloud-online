@@ -33,6 +33,19 @@ return [
         ['name' => 'api#getGroups', 'url' => '/api/v1/knowledge/groups', 'verb' => 'GET'],
         ['name' => 'api#getModels', 'url' => '/api/v1/knowledge/models', 'verb' => 'GET'],
 
+        // What Synaplan made of the person's files: the bird, the Synaplan tab, the searchable list
+        ['name' => 'cloudStatus#status', 'url' => '/api/v1/cloud/status', 'verb' => 'POST'],
+        ['name' => 'cloudStatus#detail', 'url' => '/api/v1/cloud/files/{fileId}', 'verb' => 'GET'],
+        ['name' => 'cloudStatus#searchable', 'url' => '/api/v1/cloud/searchable', 'verb' => 'GET'],
+
+        // Watching a folder or a file: Synaplan runs a task on each file that arrives
+        ['name' => 'watch#options', 'url' => '/api/v1/watches/options', 'verb' => 'GET'],
+        ['name' => 'watch#start', 'url' => '/api/v1/watches', 'verb' => 'POST'],
+        ['name' => 'watch#index', 'url' => '/api/v1/watches', 'verb' => 'GET'],
+        ['name' => 'watch#waiting', 'url' => '/api/v1/watches/{id}/waiting', 'verb' => 'GET', 'requirements' => ['id' => '\d+']],
+        ['name' => 'watch#update', 'url' => '/api/v1/watches/{id}', 'verb' => 'PATCH', 'requirements' => ['id' => '\d+']],
+        ['name' => 'watch#stop', 'url' => '/api/v1/watches/{id}', 'verb' => 'DELETE', 'requirements' => ['id' => '\d+']],
+
         // Client runtime config (language + memory availability) for the chat UI
         ['name' => 'api#clientConfig', 'url' => '/api/v1/client-config', 'verb' => 'GET'],
         // What the Files app offers, by what the connected Synaplan supports

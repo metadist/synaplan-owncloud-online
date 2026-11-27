@@ -98,6 +98,12 @@ export function describeFailure(code?: string, message?: string): Failure {
       return { text: t('This file is empty.') }
     case 'no_text':
       return { text: t('Synaplan found no text in this file. It may be a scan or protected by a password.') }
+    case 'watch_needs_edit':
+      return { text: t('Only people who may edit a folder or a file can watch it.') }
+    case 'watches_off':
+      return { text: t('Your administrator turned off watching folders.') }
+    case 'watch_shared_off':
+      return { text: t('Your administrator turned off watching shared folders.') }
     case 'translation_unavailable':
       return { text: t('This Synaplan cannot translate a file. Ask your administrator.') }
     case 'copy_too_large':

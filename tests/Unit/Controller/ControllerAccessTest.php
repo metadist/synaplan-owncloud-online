@@ -46,6 +46,17 @@ final class ControllerAccessTest extends TestCase
         'api#clientConfig' => [self::PERSON],
         'api#features' => [self::PERSON],
 
+        'cloudStatus#status' => [self::PERSON],
+        'cloudStatus#detail' => [self::PERSON],
+        'cloudStatus#searchable' => [self::PERSON],
+
+        'watch#options' => [self::PERSON],
+        'watch#start' => [self::PERSON],
+        'watch#index' => [self::PERSON],
+        'watch#waiting' => [self::PERSON],
+        'watch#update' => [self::PERSON],
+        'watch#stop' => [self::PERSON],
+
         'consent#getConsent' => [self::PERSON],
         'consent#setConsent' => [self::PERSON],
 

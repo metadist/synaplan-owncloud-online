@@ -7,29 +7,32 @@
  * the consent card when the person has not agreed yet. Translate is added
  * once the server said the connected Synaplan translates, and "Let Synaplan
  * read this folder" once it said the administrator lets people name
- * folders; the Files list shows an action registered later as well.
+ * folders, and "Watch with Synaplan…" once it said Synaplan watches folders
+ * and files; the Files list shows an action registered later as well.
  *
  * New → From Synaplan… is a plugin of the Files app's New menu: it copies the
- * person's Synaplan files into the folder that is open.
+ * person's Synaplan files into the folder that is open. The bird beside the
+ * files Synaplan holds, and the Synaplan tab of the details view, come from a
+ * plugin of the file lists (see cloud_state/fileList.ts).
  */
-import type { Component } from 'vue'
+import { registerCloudState } from './cloud_state/fileList'
 import ChatPanel from './components/ChatPanel.vue'
-import ConsentCard from './components/ConsentCard.vue'
 import FromSynaplanModal from './components/FromSynaplanModal.vue'
 import KnowledgeModal from './components/KnowledgeModal.vue'
 import SummaryModal from './components/SummaryModal.vue'
 import TranslateModal from './components/TranslateModal.vue'
+import WatchModal from './components/WatchModal.vue'
 import { api } from './shared/api'
-import { isBlocked, loadConsent } from './shared/consent'
-import { failureFromError } from './shared/failures'
+import { describeFailure, failureFromError } from './shared/failures'
+import { loadFeatures } from './shared/features'
+import { openGuarded } from './shared/guarded'
 import { CHAT_MIMES, SEARCHABLE_MIMES, SUMMARIZE_MIMES, TRANSLATE_MIMES } from './shared/mimes'
-import { openModal } from './shared/mount'
 import { APP_ID, ApiError, translate as t } from './shared/oc'
 
 type FileContext = {
   fileList?: { getModelForFile?: (name: string) => { id?: number; get?: (k: string) => unknown } }
   fileInfoModel?: { id?: number; get?: (k: string) => unknown }
-  $file?: { data?: (k: string) => unknown }
+  $file?: { data?: (k: string) => unknown; attr?: (k: string) => string | undefined }
   /** The folder that holds the row, as the Files app gives it. */
   dir?: string
 }
@@ -48,20 +51,17 @@ function resolveFileId(fileName: string, context: FileContext): number | null {
   return fromRow ? Number(fromRow) : null
 }
 
-/** Open a modal, or the consent card first while the person has not agreed. */
-async function openGuarded(component: Component, props: Record<string, unknown>): Promise<void> {
-  const state = await loadConsent()
-  if (!state || !isBlocked(state)) {
-    openModal(component, props)
-    return
+/** Whether the row is shared with the person, or the person shares it. */
+export function isShared(fileName: string, context: FileContext): boolean {
+  const model =
+    context.fileInfoModel ??
+    (context.fileList?.getModelForFile ? context.fileList.getModelForFile(fileName) : undefined)
+  const mountType = String(model?.get?.('mountType') ?? context.$file?.attr?.('data-mounttype') ?? '')
+  if (mountType.startsWith('shared')) {
+    return true
   }
-  const gate = openModal(ConsentCard, {
-    state,
-    onGranted: () => {
-      gate.close()
-      openModal(component, props)
-    },
-  })
+  const shareTypes = model?.get?.('shareTypes') ?? context.$file?.attr?.('data-share-types')
+  return Array.isArray(shareTypes) ? shareTypes.length > 0 : String(shareTypes ?? '').trim() !== ''
 }
 
 /** A folder's path in the person's files, from the row's name and the folder that holds it. */
@@ -94,7 +94,10 @@ type FileAction = {
   name: string
   label: string
   mimes: readonly string[]
-  open: (fileId: number, fileName: string, dir: string | undefined) => void
+  /** The rights a row needs for the action; reading by default. */
+  permissions?: number
+  order?: number
+  open: (fileId: number, fileName: string, dir: string | undefined, context: FileContext) => void
 }
 
 function register(): void {
@@ -111,8 +114,8 @@ function register(): void {
         name: action.name,
         displayName: action.label,
         mime,
-        permissions: OC.PERMISSION_READ,
-        order: 100,
+        permissions: action.permissions ?? OC.PERMISSION_READ,
+        order: action.order ?? 100,
         icon: iconUrl,
         iconClass: 'icon-category-integration',
         actionHandler: (fileName: string, context: FileContext) => {
@@ -121,7 +124,7 @@ function register(): void {
             OC.Notification.showTemporary(t('Could not determine the file id.'))
             return
           }
-          action.open(fileId, fileName, context.dir)
+          action.open(fileId, fileName, context.dir, context)
         },
       })
     }
@@ -146,27 +149,43 @@ function register(): void {
     open: (fileId, fileName) => void openGuarded(ChatPanel, { fileId, fileName, compact: true }),
   })
 
-  void api.features().then(
-    (features) => {
-      if (features.translation) {
-        add({
-          name: 'synaplanTranslate',
-          label: t('Translate with Synaplan'),
-          mimes: TRANSLATE_MIMES,
-          open: (fileId, fileName) => void openGuarded(TranslateModal, { fileId, fileName }),
-        })
-      }
-      if (features.read_folders) {
-        add({
-          name: 'synaplanReadFolder',
-          label: t('Let Synaplan read this folder'),
-          mimes: ['dir'],
-          open: (fileId, fileName, dir) => void allowFolder(fileId, folderPath(dir, fileName)),
-        })
-      }
-    },
-    () => undefined,
-  )
+  void loadFeatures().then((features) => {
+    if (features.translation) {
+      add({
+        name: 'synaplanTranslate',
+        label: t('Translate with Synaplan'),
+        mimes: TRANSLATE_MIMES,
+        open: (fileId, fileName) => void openGuarded(TranslateModal, { fileId, fileName }),
+      })
+    }
+    if (features.read_folders) {
+      add({
+        name: 'synaplanReadFolder',
+        label: t('Let Synaplan read this folder'),
+        mimes: ['dir'],
+        open: (fileId, fileName, dir) => void allowFolder(fileId, folderPath(dir, fileName)),
+      })
+    }
+    if (features.watches) {
+      // Watching a folder takes the right to add to it, a file the right to change it.
+      const watchAs = (kind: 'folder' | 'file'): FileAction => ({
+        name: 'synaplanWatch',
+        label: t('Watch with Synaplan…'),
+        mimes: [kind === 'folder' ? 'dir' : 'file'],
+        permissions: kind === 'folder' ? OC.PERMISSION_CREATE : OC.PERMISSION_UPDATE,
+        order: 53,
+        open: (fileId, fileName, _dir, context) => {
+          if (!features.watch_shared && isShared(fileName, context)) {
+            OC.Notification.showTemporary(describeFailure('watch_shared_off').text)
+            return
+          }
+          void openGuarded(WatchModal, { fileId, name: fileName, kind })
+        },
+      })
+      add(watchAs('folder'))
+      add(watchAs('file'))
+    }
+  })
 }
 
 export const FROM_SYNAPLAN_ENTRY = 'synaplan-from-synaplan'
@@ -222,6 +241,7 @@ function registerFromSynaplan(): void {
 }
 
 registerFromSynaplan()
+registerCloudState()
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', register)

@@ -2,6 +2,7 @@ import { expect, request } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import {
   APP,
+  OCO_CONTAINER,
   OCO_URL,
   ownCloudAs,
   resetPerson,
@@ -64,9 +65,23 @@ async function register(token: string): Promise<string> {
  * Synaplan allows a registered client 30 updates an hour and has no setting
  * to lift that. Every saved admin setting is one update, so a test stack
  * that stays up between runs locks this ownCloud.online out within a few
- * runs. Clear those counters in the test stack's Redis before each run.
+ * runs. Clear this ownCloud.online's counter in the test stack's Redis
+ * before each run, and only its own: other clients of a shared stack keep
+ * theirs.
  */
-function resetClientUpdateLimit(): void {
+async function resetClientUpdateLimit(): Promise<void> {
+  const admin = await ownCloudAs('admin')
+  const settings = await admin.get(`${APP}/api/v1/settings`)
+  expect(settings.ok(), 'reading the admin settings').toBe(true)
+  const { link_instance_id: instanceId } = (await settings.json()) as { link_instance_id?: string }
+  await admin.dispose()
+  if (!instanceId) {
+    return
+  }
+  if (!/^[\w-]+$/.test(instanceId)) {
+    throw new Error(`Unexpected instance id ${instanceId}.`)
+  }
+
   const redis = (...args: string[]): string[] => {
     const run = spawnSync('docker', ['exec', SYNAPLAN_REDIS_CONTAINER, 'redis-cli', ...args], { encoding: 'utf8' })
     if (run.status !== 0) {
@@ -77,9 +92,26 @@ function resetClientUpdateLimit(): void {
     }
     return run.stdout.split('\n').filter((line) => line.trim() !== '')
   }
-  const keys = redis('--scan', '--pattern', '*oauth:client-update:*')
+  const keys = redis('--scan', '--pattern', `*oauth:client-update:${instanceId}`)
   if (keys.length > 0) {
     redis('del', ...keys)
+  }
+}
+
+/**
+ * The app's version stays put between releases, so an ownCloud.online kept
+ * running from an older checkout never gets the migrations and background
+ * jobs added since; docker/dev-migrate.sh applies them.
+ */
+function catchUpWithTheCheckout(): void {
+  const run = spawnSync(
+    'docker',
+    ['exec', '-u', 'www-data', OCO_CONTAINER, 'sh', `/var/www/html/apps/oco_synaplan/docker/dev-migrate.sh`],
+    { encoding: 'utf8' },
+  )
+  if (run.status !== 0) {
+    const reason = (run.stderr || run.error?.message || '').trim()
+    throw new Error(`Could not bring ${OCO_CONTAINER} up to the checkout; set OCO_CONTAINER. ${reason}`)
   }
 }
 
@@ -94,7 +126,8 @@ function resetClientUpdateLimit(): void {
 export default async function globalSetup(): Promise<void> {
   await waitUntilReady(`${SYNAPLAN_URL}/api/health`)
   await waitUntilReady(`${OCO_URL}/status.php`)
-  resetClientUpdateLimit()
+  catchUpWithTheCheckout()
+  await resetClientUpdateLimit()
 
   const synaplan = await synaplanAs(SYNAPLAN_ADMIN)
   const created = await synaplan.post('/api/v1/apikeys', {

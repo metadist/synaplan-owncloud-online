@@ -25,6 +25,7 @@
             "OC\\": "tests/stubs/OC/"
         },
         "classmap": [
+            "appinfo/Migrations/",
             "tests/stubs/OC.php",
             "tests/stubs/OC_Template.php",
             "tests/stubs/OC_Util.php"

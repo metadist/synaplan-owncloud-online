@@ -205,6 +205,60 @@ final class SynaplanClientTest extends TestCase
         self::assertSame($offered, $this->client()->offersTranslation());
     }
 
+    public function testRecentFilesAreAskedOfOneSourceAtMostAHundredAtATime(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'shared');
+        $this->http->answer(static fn (): array => ['files' => []]);
+
+        $this->client()->listRecentFiles(1, 'owncloud', '', 100);
+        $this->client()->listRecentFiles(0, '', '  plan ', 500);
+        $this->client()->listRecentFiles(2, 'generated', '', 0);
+
+        $queries = array_map(static function (array $call): array {
+            parse_str((string) parse_url($call['url'], PHP_URL_QUERY), $query);
+
+            return $query;
+        }, $this->http->to('/api/v1/files'));
+        self::assertSame([
+            ['page' => '1', 'limit' => '100', 'source' => 'owncloud'],
+            ['page' => '1', 'limit' => '100', 'search' => 'plan'],
+            ['page' => '2', 'limit' => '1', 'source' => 'generated'],
+        ], $queries);
+    }
+
+    public function testAnUploadSaysWhetherSynaplanKeepsItUpToDateOnlyWhenTold(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'shared');
+        $this->http->answer(static fn (): array => ['success' => true, 'file' => ['id' => 42]]);
+
+        $this->client()->uploadFile('a.txt', 'a', 'DEFAULT');
+        $this->client()->uploadFile('a.txt', 'a', 'DEFAULT', 'vectorize', null, '7', '"e1"', true, null, true);
+        $this->client()->uploadFile('a.txt', 'a', 'DEFAULT', 'vectorize', null, '7', '"e1"', true, null, false);
+
+        [$plain, $kept, $notKept] = $this->http->to('/api/v1/files/upload');
+        self::assertArrayNotHasKey('keep_synced', $plain['body']);
+        self::assertSame(['1', '1'], [$kept['body']['overwrite'], $kept['body']['keep_synced']]);
+        self::assertSame('0', $notKept['body']['keep_synced']);
+    }
+
+    public function testAWatchIsStartedPausedAndStoppedAtItsOwnAddress(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'shared');
+        $this->http->answer(static fn (): array => ['id' => 5, 'state' => 'active']);
+
+        $this->client()->watchOptions();
+        $this->client()->startWatch(['target_kind' => 'folder', 'target_id' => '30', 'target_path' => 'Incoming', 'preset' => 'keep_searchable']);
+        $this->client()->updateWatch(5, 'paused');
+        $this->client()->stopWatch(5);
+
+        self::assertSame(
+            [['GET', '/api/v1/cloud/watches/options'], ['POST', '/api/v1/cloud/watches'], ['PATCH', '/api/v1/cloud/watches/5'], ['DELETE', '/api/v1/cloud/watches/5']],
+            array_map(static fn (array $call): array => [$call['method'], $call['path']], $this->http->calls),
+        );
+        self::assertSame(['state' => 'paused'], $this->http->calls[2]['body']);
+        self::assertSame('Incoming', $this->http->calls[1]['body']['target_path']);
+    }
+
     public function testSynaplanIsAskedWhatItSupportsOnceForEachAddress(): void
     {
         $this->http->answer(static fn (): array => ['summary' => ['types' => ['translation']]]);

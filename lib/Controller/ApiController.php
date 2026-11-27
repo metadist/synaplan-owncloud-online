@@ -14,11 +14,14 @@ namespace OCA\OcoSynaplan\Controller;
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Http\RespondsToFailures;
+use OCA\OcoSynaplan\Service\CloudStateService;
 use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\ReadScope;
 use OCA\OcoSynaplan\Service\SynaplanClient;
+use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCP\App\IAppManager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
@@ -86,6 +89,8 @@ class ApiController extends Controller
         private UserAccountService $userAccounts,
         private ReadScope $readScope,
         private PlatformLinkService $links,
+        private CloudStateService $cloudState,
+        private SynaplanConfig $synaplanConfig,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -126,15 +131,28 @@ class ApiController extends Controller
      * What the Files app offers beyond its fixed actions: Translate only where
      * the connected Synaplan translates, and "Let Synaplan read this folder"
      * only where the administrator lets people name folders and Synaplan
-     * reads folders.
+     * reads folders; the bird and the Synaplan tab only where Synaplan tells
+     * what it made of each file, and "Keep it up to date" only where Synaplan
+     * hears when files change; watching where the administrator allows it,
+     * Synaplan watches, and the feed can send files: each person with their
+     * own account, from a server registered with Synaplan.
      *
      * @NoAdminRequired
      */
     public function features(): JSONResponse
     {
+        $watches = WatchPolicy::watchingAllowedIn($this->config)
+            && $this->synaplanConfig->isPerUserAccountsEnabled()
+            && $this->synaplanConfig->isRegistered()
+            && $this->links->offersWatches();
+
         return new JSONResponse([
             'translation' => $this->synaplanClient->offersTranslation(),
             'read_folders' => $this->readScope->ceiling() !== ReadScope::MODE_WATCHED && $this->links->readsFolders(),
+            'file_state' => $this->cloudState->available(),
+            'follows_changes' => $this->cloudState->followsChanges(),
+            'watches' => $watches,
+            'watch_shared' => $watches && WatchPolicy::sharedAllowedIn($this->config),
         ]);
     }
 
@@ -227,10 +245,11 @@ class ApiController extends Controller
      *
      * @NoAdminRequired
      *
-     * @param int    $fileId   ownCloud.online file ID
-     * @param string $groupKey Target group key for vectorization
+     * @param int       $fileId     ownCloud.online file ID
+     * @param string    $groupKey   Target group key for vectorization
+     * @param bool|null $keepSynced whether Synaplan takes each new version; yes unless the person said no
      */
-    public function uploadToKnowledge(int $fileId, string $groupKey = 'DEFAULT'): JSONResponse
+    public function uploadToKnowledge(int $fileId, string $groupKey = 'DEFAULT', ?bool $keepSynced = null): JSONResponse
     {
         $body = file_get_contents('php://input');
         if ($body !== false && $body !== '') {
@@ -238,7 +257,13 @@ class ApiController extends Controller
             if (is_array($decoded) && isset($decoded['groupKey'])) {
                 $groupKey = trim((string) $decoded['groupKey']);
             }
+            if ($keepSynced === null && is_array($decoded) && array_key_exists('keepSynced', $decoded)) {
+                $keepSynced = (bool) $decoded['keepSynced'];
+            }
         }
+        // Where Synaplan hears of no change, a kept file would read as
+        // updating for good; without the field Synaplan keeps what it had.
+        $keepSynced = $this->cloudState->followsChanges() ? ($keepSynced ?? true) : null;
 
         if ($groupKey === '') {
             $groupKey = 'DEFAULT';
@@ -257,7 +282,7 @@ class ApiController extends Controller
             $userFolder = $this->rootFolder->getUserFolder($this->requireUid());
             $content = $node->getContent();
             $filename = $node->getName();
-            $originalName = $userFolder->getRelativePath($node->getPath()) ?? $filename;
+            $originalName = ltrim((string) ($userFolder->getRelativePath($node->getPath()) ?? $filename), '/');
 
             // Key the knowledge entry on the ownCloud.online file id + etag and always
             // overwrite, so re-adding (or adding a changed) file updates its
@@ -271,6 +296,8 @@ class ApiController extends Controller
                 (string) $fileId,
                 $node->getEtag(),
                 true,
+                null,
+                $keepSynced,
             );
 
             if (($result['success'] ?? false) !== true) {
@@ -476,7 +503,7 @@ class ApiController extends Controller
                 $node->getContent(),
                 '_owncloud_temp',
                 'extract',
-                $userFolder->getRelativePath($node->getPath()) ?? $node->getName(),
+                ltrim((string) ($userFolder->getRelativePath($node->getPath()) ?? $node->getName()), '/'),
             );
 
             $fileInfo = $uploadResult['files'][0] ?? null;

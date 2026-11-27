@@ -20,6 +20,11 @@ export function personalSettingsUrl(): string {
   return OC.generateUrl('/settings/personal') + '?sectionid=' + APP_ID
 }
 
+/** The administrator's General settings, where background jobs are set up. */
+export function backgroundJobsSettingsUrl(): string {
+  return OC.generateUrl('/settings/admin') + '?sectionid=general'
+}
+
 /** Translate a string (falls back to identity when OC.t is unavailable). */
 export function translate(text: string, vars?: Record<string, unknown>): string {
   if (typeof window.t === 'function') {
@@ -76,7 +81,7 @@ export class ApiError extends Error {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
 }

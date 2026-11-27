@@ -30,6 +30,8 @@ Requires a running Synaplan server.
 	<licence>Apache-2.0</licence>
 	<author mail="info@synaplan.com" homepage="https://synaplan.com">Synaplan</author>
 	<namespace>OcoSynaplan</namespace>
+	<!-- The schema steps in appinfo/Migrations run on install and on upgrade. -->
+	<use-migrations>true</use-migrations>
 	<!-- WebDAV requests load only filesystem apps, and this one follows files moved there. -->
 	<types>
 		<filesystem/>
@@ -59,6 +61,8 @@ Requires a running Synaplan server.
 	<background-jobs>
 		<job>OCA\OcoSynaplan\BackgroundJob\AdoptIdentitiesJob</job>
 		<job>OCA\OcoSynaplan\BackgroundJob\RefreshNotifyKeysJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\WatchFeedJob</job>
+		<job>OCA\OcoSynaplan\BackgroundJob\WatchReconcileJob</job>
 	</background-jobs>
 	<navigation>
 		<name>Synaplan</name>

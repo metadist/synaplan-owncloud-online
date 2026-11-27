@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\OcoSynaplan\Tests\Unit\Support;
 
-use OCP\Http\Client\IClient;
+use OCA\OcoSynaplan\Http\PatchingClient;
 use OCP\Http\Client\IClientService;
 use OCP\Http\Client\IResponse;
 
@@ -45,7 +45,7 @@ final class RecordingHttp implements IClientService
     {
         $http = $this;
 
-        return new class ($http) implements IClient {
+        return new class ($http) implements PatchingClient {
             public function __construct(
                 private RecordingHttp $http,
             ) {
@@ -97,6 +97,14 @@ final class RecordingHttp implements IClientService
             public function options($uri, array $options = [])
             {
                 return $this->http->handle('OPTIONS', (string) $uri, $options);
+            }
+
+            /**
+             * @param array<string, mixed> $options
+             */
+            public function patch(string $uri, array $options = []): IResponse
+            {
+                return $this->http->handle('PATCH', $uri, $options);
             }
         };
     }

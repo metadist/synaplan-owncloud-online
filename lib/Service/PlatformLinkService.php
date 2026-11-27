@@ -36,7 +36,7 @@ class PlatformLinkService
      * built here: Synaplan offers a feature to a person only when the app
      * says it has it.
      */
-    public const CAPABILITIES = ['deliveries', 'pickups', 'read_scope'];
+    public const CAPABILITIES = ['deliveries', 'pickups', 'read_scope', 'source_events', 'watches'];
     private const REGISTRATION_STATUS = 'link_registration_status';
     /** A copy may be 100 MB; its one-time download path is valid this long. */
     private const DOWNLOAD_TIMEOUT = 300;
@@ -45,6 +45,8 @@ class PlatformLinkService
     /** As long as Synaplan lets its configuration be kept. */
     private const OFFERS_TTL = 300;
     private const OFFERS_RETRY_TTL = 60;
+    /** How long Synaplan's last answer stands in while it gives none. */
+    private const OFFERS_LAST_TTL = 86400;
     /** Synaplan no longer accepts this registration; its own statuses are pending and active. */
     public const STATUS_REFUSED = 'refused';
 
@@ -162,7 +164,7 @@ class PlatformLinkService
             'client_uri' => $this->urlGenerator->getAbsoluteURL('/'),
             'redirect_uri' => $this->callbackUrl(),
             'delivery_url' => $this->deliveryUrl(),
-            'capabilities' => self::CAPABILITIES,
+            'capabilities' => $this->capabilities(),
             'server_id' => $this->synaplanConfig->getInstanceId(),
             'version' => $this->appVersion(),
         ], $registrationToken);
@@ -246,19 +248,52 @@ class PlatformLinkService
 
     /**
      * Whether this Synaplan reads folders: its configuration offers both
-     * folder reads and the read setting. With platform links off, or with no
-     * answer, it offers neither; no answer is asked again after a minute.
+     * folder reads and the read setting.
      */
     public function readsFolders(): bool
     {
+        $offers = $this->offers();
+
+        return in_array('pickups', $offers, true) && in_array('read_scope', $offers, true);
+    }
+
+    /**
+     * Whether this Synaplan tells which files it made searchable and how
+     * they are: the bird in Files and the Synaplan tab.
+     */
+    public function tellsFileState(): bool
+    {
+        return in_array('cloud_status', $this->offers(), true);
+    }
+
+    /** Whether this Synaplan wants to hear when its files change, move or go. */
+    public function followsChanges(): bool
+    {
+        return in_array('source_events', $this->offers(), true);
+    }
+
+    /** Whether this Synaplan feeds tasks from watched folders and files. */
+    public function offersWatches(): bool
+    {
+        return in_array('watches', $this->offers(), true);
+    }
+
+    /**
+     * What this Synaplan offers clouds, as its configuration lists it. With
+     * platform links off it offers nothing. While Synaplan gives no answer,
+     * its last answer of the past day stands in, else it offers nothing, and
+     * it is asked again after a minute.
+     *
+     * @return list<string>
+     */
+    private function offers(): array
+    {
         $cache = $this->cacheFactory->create(Application::APP_ID);
-        $key = 'offered/' . md5($this->synaplanConfig->getBaseUrl());
-        $cached = $cache->get($key);
-        if ($cached === '1' || $cached === '0') {
-            return $cached === '1';
+        $key = 'offers/' . md5($this->synaplanConfig->getBaseUrl());
+        $kept = $this->keptOffers($cache->get($key));
+        if ($kept !== null) {
+            return $kept;
         }
-        $answered = false;
-        $offered = false;
         try {
             $configuration = $this->request(
                 'GET',
@@ -270,18 +305,34 @@ class PlatformLinkService
                 self::OFFERS_TIMEOUT,
             );
             $status = (int) ($configuration['status_code'] ?? 200);
-            $answered = $status === 200 || $status === 404;
-            $capabilities = $status === 200 && is_array($configuration['capabilities'] ?? null) ? $configuration['capabilities'] : [];
-            $offered = in_array('pickups', $capabilities, true) && in_array('read_scope', $capabilities, true);
+            if ($status === 200 || $status === 404) {
+                $capabilities = $status === 200 && is_array($configuration['capabilities'] ?? null) ? $configuration['capabilities'] : [];
+                $offers = array_values(array_filter($capabilities, 'is_string'));
+                $cache->set($key, (string) json_encode($offers), self::OFFERS_TTL);
+                $cache->set($key . '/last', (string) json_encode($offers), self::OFFERS_LAST_TTL);
+
+                return $offers;
+            }
         } catch (\Throwable $e) {
             $this->logger->warning('Synaplan\'s configuration could not be read: {message}', [
                 'app' => Application::APP_ID,
                 'message' => $e->getMessage(),
             ]);
         }
-        $cache->set($key, $offered ? '1' : '0', $answered ? self::OFFERS_TTL : self::OFFERS_RETRY_TTL);
+        $offers = $this->keptOffers($cache->get($key . '/last')) ?? [];
+        $cache->set($key, (string) json_encode($offers), self::OFFERS_RETRY_TTL);
 
-        return $offered;
+        return $offers;
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    private function keptOffers(mixed $cached): ?array
+    {
+        $kept = is_string($cached) ? json_decode($cached, true) : null;
+
+        return is_array($kept) ? array_values(array_filter($kept, 'is_string')) : null;
     }
 
     /**
@@ -395,6 +446,68 @@ class PlatformLinkService
             true,
             $timeoutSeconds,
         );
+    }
+
+    /**
+     * This person's watches as Synaplan lists them: every one not stopped.
+     *
+     * @return list<mixed>
+     */
+    public function listWatches(string $uid): array
+    {
+        $answer = $this->request('GET', '/api/v1/cloud/watches', null, $this->personHeaders($uid));
+
+        return is_array($answer['items'] ?? null) ? array_values($answer['items']) : [];
+    }
+
+    /**
+     * Which of these files the watch still has to get, and which it has.
+     *
+     * @param list<array{id: string, version: string}> $items 1 to 500
+     * @return array{process: list<string>, forget: list<string>}
+     */
+    public function reconcileWatch(string $uid, int $watchId, array $items): array
+    {
+        $answer = $this->request(
+            'POST',
+            '/api/v1/cloud/watches/' . $watchId . '/reconcile',
+            ['items' => $items],
+            array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
+        );
+        $ids = static fn (mixed $list): array => is_array($list) ? array_values(array_filter($list, 'is_string')) : [];
+
+        return ['process' => $ids($answer['process'] ?? null), 'forget' => $ids($answer['forget'] ?? null)];
+    }
+
+    /**
+     * Hand one file to a watch, or tell it its target was deleted or restored
+     * (then without the file). Synaplan's refusals come back with their status.
+     *
+     * @param array<string, string> $fields id, version, name, path; event or own_write
+     * @param array{bytes: resource|string, name: string, mime: string}|null $file
+     * @return array<string, mixed> the answer, with `status_code`
+     */
+    public function sendWatchFile(string $uid, int $watchId, array $fields, ?array $file, int $timeoutSeconds = 120): array
+    {
+        $multipart = [];
+        foreach ($fields as $name => $value) {
+            $multipart[] = ['name' => $name, 'contents' => $value];
+        }
+        if ($file !== null) {
+            $multipart[] = ['name' => 'file', 'contents' => $file['bytes'], 'filename' => $file['name'], 'headers' => ['Content-Type' => $file['mime']]];
+        }
+        $response = $this->clientService->newClient()->post(
+            $this->synaplanConfig->getBaseUrl() . '/api/v1/cloud/watches/' . $watchId . '/files',
+            [
+                'headers' => $this->personHeaders($uid),
+                'multipart' => $multipart,
+                'timeout' => max(1, $timeoutSeconds),
+                'http_errors' => false,
+            ],
+        );
+        $decoded = json_decode((string) $response->getBody(), true);
+
+        return ['status_code' => (int) $response->getStatusCode()] + (is_array($decoded) ? $decoded : []);
     }
 
     /**
@@ -539,7 +652,7 @@ class PlatformLinkService
         }
         $about = [
             'server_id' => $this->synaplanConfig->getInstanceId(),
-            'app_capabilities' => self::CAPABILITIES,
+            'app_capabilities' => $this->capabilities(),
             'software_version' => $this->appVersion(),
         ];
         try {
@@ -599,11 +712,94 @@ class PlatformLinkService
     }
 
     /**
+     * Tell Synaplan, with the person's own credential, that files of theirs
+     * changed, moved, went to the trash or came back. Synaplan answers with
+     * the copies kept up to date that it wants again; a retry is asked for
+     * when it was not reached or is busy, or the person's token could not be
+     * renewed just now.
+     *
+     * @param list<array{id: string, event: string, version: string, path: string}> $events
+     * @return array{applied: int, ignored: int, reupload: list<array{external_id: string, id: string}>, retry?: true}
+     */
+    public function reportSourceEvents(array $events, string $uid): array
+    {
+        if ($events === [] || !$this->oauth->isRegistered()) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+        }
+        if (!$this->canActFor($uid)) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []]
+                + ($this->userAccounts->holdsCredential($uid) ? ['retry' => true] : []);
+        }
+        try {
+            $decoded = $this->request(
+                'POST',
+                '/api/v1/platform-links/sources/events',
+                ['events' => $events],
+                ['Content-Type' => 'application/json'] + $this->personHeaders($uid),
+                true,
+                true,
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not tell Synaplan that files of {uid} changed: {message}', [
+                'app' => Application::APP_ID,
+                'uid' => $uid,
+                'message' => $e->getMessage(),
+            ]);
+
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => [], 'retry' => true];
+        }
+        $status = (int) ($decoded['status_code'] ?? 200);
+        if ($status === 429 || $status >= 500) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => [], 'retry' => true];
+        }
+        if ($status >= 400) {
+            return ['applied' => 0, 'ignored' => 0, 'reupload' => []];
+        }
+        $reupload = [];
+        foreach (is_array($decoded['reupload'] ?? null) ? $decoded['reupload'] : [] as $item) {
+            if (is_array($item) && is_string($item['external_id'] ?? null) && is_string($item['id'] ?? null)) {
+                $reupload[] = ['external_id' => $item['external_id'], 'id' => $item['id']];
+            }
+        }
+
+        return [
+            'applied' => (int) ($decoded['applied'] ?? 0),
+            'ignored' => (int) ($decoded['ignored'] ?? 0),
+            'reupload' => $reupload,
+        ];
+    }
+
+    /**
      * Whether this person can be acted for: their own Synaplan credential is held.
      */
     public function canActFor(string $uid): bool
     {
         return $uid !== '' && $this->userAccounts->getStoredApiKey($uid) !== '';
+    }
+
+    /**
+     * canActFor() said no only for now: the person's credential is held, but
+     * it could not be renewed.
+     */
+    public function canActForLater(string $uid): bool
+    {
+        return $uid !== '' && $this->userAccounts->holdsCredential($uid);
+    }
+
+    /**
+     * What this app does. Synaplan offers watching only for clouds that
+     * report `watches`, so it is left out while the administrator has
+     * turned watching folders off.
+     *
+     * @return list<string>
+     */
+    public function capabilities(): array
+    {
+        if (WatchPolicy::watchingAllowedIn($this->config)) {
+            return self::CAPABILITIES;
+        }
+
+        return array_values(array_diff(self::CAPABILITIES, ['watches']));
     }
 
     /**

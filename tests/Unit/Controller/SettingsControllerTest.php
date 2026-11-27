@@ -85,7 +85,7 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(1, $put);
         self::assertSame('https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound', $put[0]['body']['delivery_url']);
-        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[0]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events', 'watches'], $put[0]['body']['app_capabilities']);
         self::assertSame(
             'https://cloud-internal.example.org/index.php/apps/oco_synaplan/api/v1/inbound',
             $this->controller()->getSettings()->getData()['delivery_url'],
@@ -115,7 +115,20 @@ final class SettingsControllerTest extends TestCase
         $put = $this->http->to('/oauth/register/client-1');
         self::assertCount(2, $put);
         self::assertArrayNotHasKey('delivery_url', $put[1]['body']);
-        self::assertSame(['deliveries', 'pickups', 'read_scope'], $put[1]['body']['app_capabilities']);
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events', 'watches'], $put[1]['body']['app_capabilities']);
+    }
+
+    public function testTurningWatchingOffStopsAnnouncingItAndIsReadBack(): void
+    {
+        $this->register();
+        $this->http->answer(static fn (): array => []);
+        $this->controller()->saveSettings(watch_folders: false, watch_shared_folders: false);
+
+        self::assertSame(['deliveries', 'pickups', 'read_scope', 'source_events'], $this->http->to('/oauth/register/client-1')[0]['body']['app_capabilities']);
+        $settings = $this->controller()->getSettings()->getData();
+        self::assertFalse($settings['watch_folders']);
+        self::assertFalse($settings['watch_shared_folders']);
+        self::assertSame('ajax', $settings['background_jobs_mode']);
     }
 
     public function testRegisteringReadsTheNotificationKeys(): void

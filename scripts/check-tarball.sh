@@ -9,7 +9,8 @@ app=oco_synaplan
 tarball="${1:-$app.tar.gz}"
 contents="$(tar -tzf "$tarball")"
 
-for path in appinfo/info.xml appinfo/app.php appinfo/routes.php lib/AppInfo/Application.php \
+for path in appinfo/info.xml appinfo/app.php appinfo/routes.php appinfo/Migrations/Version20261123140000.php \
+	lib/AppInfo/Application.php \
 	js/files-init.js js/chat-launcher.js js/settings.js js/personal-settings.js js/research.js \
 	public/link-return.html public/link-return.js templates/ img/app.svg \
 	l10n/en.json l10n/en.js l10n/de.json l10n/de.js l10n/de_DE.json l10n/de_DE.js \

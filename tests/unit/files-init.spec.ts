@@ -4,10 +4,13 @@ const { openModal } = vi.hoisted(() => ({ openModal: vi.fn() }))
 
 vi.mock('../../src/components/ChatPanel.vue', () => ({ default: {} }))
 vi.mock('../../src/components/ConsentCard.vue', () => ({ default: {} }))
+vi.mock('../../src/components/FilesSidebarTab.vue', () => ({ default: {} }))
 vi.mock('../../src/components/FromSynaplanModal.vue', () => ({ default: { name: 'FromSynaplanModal' } }))
 vi.mock('../../src/components/KnowledgeModal.vue', () => ({ default: {} }))
 vi.mock('../../src/components/SummaryModal.vue', () => ({ default: {} }))
 vi.mock('../../src/components/TranslateModal.vue', () => ({ default: {} }))
+vi.mock('../../src/components/WatchModal.vue', () => ({ default: { name: 'WatchModal' } }))
+vi.mock('../../src/components/QuestionModal.vue', () => ({ default: {} }))
 vi.mock('../../src/shared/consent', () => ({ loadConsent: async () => null, isBlocked: () => false }))
 vi.mock('../../src/shared/mount', () => ({ openModal }))
 
@@ -70,6 +73,101 @@ describe('the file actions', () => {
   it('offer "Let Synaplan read this folder" where the administrator lets people name folders', async () => {
     expect(await actionsAfter({ translation: false, read_folders: true })).toContain('synaplanReadFolder')
     expect(await actionsAfter({ translation: false, read_folders: false })).not.toContain('synaplanReadFolder')
+  })
+
+  it('offer "Watch with Synaplan…" only where Synaplan watches and the administrator allows it', async () => {
+    expect(await actionsAfter({ watches: true })).toContain('synaplanWatch')
+    expect(await actionsAfter({ watches: false })).not.toContain('synaplanWatch')
+  })
+})
+
+/** The watch actions, once the page heard what Synaplan offers. */
+async function watchActions(features: Record<string, boolean>) {
+  const registerAction = vi.fn()
+  const showTemporary = vi.fn()
+  vi.stubGlobal('OCA', { Files: { fileActions: { registerAction } } })
+  vi.stubGlobal('OC', {
+    generateUrl: (path: string) => '/index.php' + path,
+    imagePath: (app: string, file: string) => `/apps/${app}/img/${file}`,
+    requestToken: 'request-token',
+    PERMISSION_READ: 1,
+    PERMISSION_UPDATE: 2,
+    PERMISSION_CREATE: 4,
+    Notification: { showTemporary, show: vi.fn() },
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(features)),
+  )
+  vi.resetModules()
+  await import('../../src/files-init')
+  await vi.waitFor(() => expect(registerAction.mock.calls.map(([action]) => action.name)).toContain('synaplanWatch'))
+  const watch = registerAction.mock.calls.map(([action]) => action).filter((action) => action.name === 'synaplanWatch')
+  const modal = (await import('../../src/components/WatchModal.vue')).default
+
+  return {
+    folder: watch.find((action) => action.mime === 'dir'),
+    file: watch.find((action) => action.mime === 'file'),
+    modal,
+    showTemporary,
+  }
+}
+
+describe('Watch with Synaplan…', () => {
+  it('takes the right to add to a folder, and the right to change a file', async () => {
+    const { folder, file } = await watchActions({ watches: true, watch_shared: true })
+
+    expect(folder).toMatchObject({ displayName: 'Watch with Synaplan…', permissions: 4, order: 53 })
+    expect(file).toMatchObject({ displayName: 'Watch with Synaplan…', permissions: 2, order: 53 })
+  })
+
+  it('opens the watch dialog for the folder or the file', async () => {
+    const { folder, file, modal } = await watchActions({ watches: true, watch_shared: true })
+
+    folder.actionHandler('Incoming', { fileInfoModel: { id: 42 } })
+    await vi.waitFor(() => expect(openModal).toHaveBeenCalledTimes(1))
+    expect(openModal.mock.calls[0][0]).toBe(modal)
+    expect(openModal.mock.calls[0][1]).toMatchObject({ fileId: 42, name: 'Incoming', kind: 'folder' })
+
+    file.actionHandler('plan.docx', { fileInfoModel: { id: 43 } })
+    await vi.waitFor(() => expect(openModal).toHaveBeenCalledTimes(2))
+    expect(openModal.mock.calls[1][1]).toMatchObject({ fileId: 43, name: 'plan.docx', kind: 'file' })
+  })
+
+  it.each([
+    ['shared with the person', { mountType: 'shared-root' }],
+    ['the person shares', { shareTypes: [0] }],
+  ])('says the administrator turned it off for a folder %s', async (_, model) => {
+    const { folder, showTemporary } = await watchActions({ watches: true, watch_shared: false })
+
+    folder.actionHandler('Team', {
+      fileInfoModel: { id: 42, get: (key: string) => (model as Record<string, unknown>)[key] },
+    })
+
+    expect(showTemporary).toHaveBeenCalledWith('Your administrator turned off watching shared folders.')
+    expect(openModal).not.toHaveBeenCalled()
+  })
+
+  it('opens the dialog for a folder of the person’s own while shared folders are off', async () => {
+    const { folder } = await watchActions({ watches: true, watch_shared: false })
+
+    folder.actionHandler('Mine', { fileInfoModel: { id: 42, get: () => undefined } })
+
+    await vi.waitFor(() => expect(openModal).toHaveBeenCalled())
+  })
+})
+
+describe('isShared', () => {
+  it.each([
+    [{ 'data-mounttype': 'shared' }, true],
+    [{ 'data-share-types': '0,3' }, true],
+    [{ 'data-mounttype': 'external-root' }, false],
+    [{}, false],
+  ])('reads the row %j as shared: %s', async (attributes, shared) => {
+    const { isShared } = await import('../../src/files-init')
+    const $file = { attr: (key: string) => (attributes as Record<string, string>)[key] }
+
+    expect(isShared('Team', { $file })).toBe(shared)
   })
 })
 

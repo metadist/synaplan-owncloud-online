@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 
 export const OCO_URL = process.env.OCO_URL ?? 'http://localhost:8083'
 /** The ownCloud.online container of the dev stack (docker-compose.dev.yml). */
-const OCO_CONTAINER = process.env.OCO_CONTAINER ?? 'synaplan-owncloud-dev'
+export const OCO_CONTAINER = process.env.OCO_CONTAINER ?? 'synaplan-owncloud-dev'
 /** Only ever the Synaplan test stack: the journeys create keys and register this server there. */
 export const SYNAPLAN_URL = process.env.E2E_SYNAPLAN_URL ?? 'http://localhost:8001'
 export const APP = '/index.php/apps/oco_synaplan'
@@ -14,8 +14,13 @@ export const PERSONAL_SETTINGS = '/index.php/settings/personal?sectionid=oco_syn
 export const ADMIN_SETTINGS = '/index.php/settings/admin?sectionid=oco_synaplan'
 
 /** Fixture accounts of the Synaplan test stack. */
-export const SYNAPLAN_ADMIN = { email: 'admin@synaplan.com', password: 'admin123' }
-export const SYNAPLAN_PERSON = { email: 'demo@synaplan.com', password: 'demo123' }
+export interface SynaplanAccount {
+  email: string
+  password: string
+}
+
+export const SYNAPLAN_ADMIN: SynaplanAccount = { email: 'admin@synaplan.com', password: 'admin123' }
+export const SYNAPLAN_PERSON: SynaplanAccount = { email: 'demo@synaplan.com', password: 'demo123' }
 
 /** The test people of docker/dev-entrypoint.sh; the admin password is `admin`. */
 export function passwordOf(uid: string): string {
@@ -79,7 +84,7 @@ export async function uploadReview(uid: string): Promise<void> {
 }
 
 /** An API client signed in to Synaplan. */
-export async function synaplanAs(account: { email: string; password: string }): Promise<APIRequestContext> {
+export async function synaplanAs(account: SynaplanAccount): Promise<APIRequestContext> {
   const context = await request.newContext({ baseURL: SYNAPLAN_URL })
   const response = await context.post('/api/v1/auth/login', { data: account })
   expect(response.ok(), `Synaplan login as ${account.email}`).toBe(true)
@@ -116,7 +121,7 @@ export async function resetPerson(uid: string): Promise<void> {
 }
 
 /** The Synaplan app container of the test stack, whose database the account cleanup reads. */
-const SYNAPLAN_CONTAINER = process.env.SYNAPLAN_APP_CONTAINER ?? 'synaplan-app-test'
+export const SYNAPLAN_CONTAINER = process.env.SYNAPLAN_APP_CONTAINER ?? 'synaplan-app-test'
 
 const OCO_HOST = new URL(OCO_URL).host
 if (!/^[a-z0-9.-]+(:\d+)?$/i.test(OCO_HOST)) {
@@ -133,7 +138,7 @@ const OURS = `p.BCLIENT = 'owncloud' AND p.BHOST = '${OCO_HOST}'`
  *
  * @param uid ownCloud.online user id
  */
-function ownIdentities(uid: string): string {
+export function ownIdentities(uid: string): string {
   if (!/^[a-z0-9._-]+$/i.test(uid)) {
     throw new Error(`unexpected uid ${uid}`)
   }
@@ -200,6 +205,31 @@ function synaplanSql(sql: string, found: RegExp, what: string): string {
     )
   }
   return match[1]
+}
+
+/**
+ * One value from the Synaplan test stack's database, '' when there is none;
+ * for what Synaplan's API shows only to the cloud a row belongs to. The
+ * value has no spaces.
+ *
+ * @param sql a query of one value
+ */
+export function synaplanValue(sql: string): string {
+  return synaplanSql(`SELECT CONCAT('value:', COALESCE((${sql}), '')) AS found`, /value:(\S*)/, 'a value')
+}
+
+/** Run SQL in the Synaplan test stack's database that returns nothing. */
+export function synaplanRun(sql: string): void {
+  const run = spawnSync(
+    'docker',
+    ['exec', SYNAPLAN_CONTAINER, 'php', 'bin/console', 'dbal:run-sql', sql.replace(/\s+/g, ' ')],
+    { encoding: 'utf8' },
+  )
+  if (run.status !== 0) {
+    throw new Error(
+      `Could not run SQL in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
+    )
+  }
 }
 
 /**
@@ -417,6 +447,260 @@ export function occ(...args: string[]): string {
   return run.stdout
 }
 
+/** The dev stack's container that runs the background jobs every minute (docker-compose.dev.yml). */
+const OCO_CRON_CONTAINER = process.env.OCO_CRON_CONTAINER ?? 'synaplan-owncloud-dev-cron'
+
+function docker(...args: string[]): void {
+  const run = spawnSync('docker', args, { encoding: 'utf8' })
+  if (run.status !== 0) {
+    const reason = (run.stderr || run.error?.message || '').trim()
+    throw new Error(`docker ${args.join(' ')} failed; set OCO_CRON_CONTAINER. ${reason}`)
+  }
+}
+
+/**
+ * Run `act` while the dev stack's cron waits, so a journey runs the app's
+ * background jobs one at a time and sees what each of them did.
+ */
+export async function withoutCron<T>(act: () => Promise<T>): Promise<T> {
+  docker('pause', OCO_CRON_CONTAINER)
+  try {
+    return await act()
+  } finally {
+    docker('unpause', OCO_CRON_CONTAINER)
+  }
+}
+
+/** A background job of the app, waiting in the queue, with its argument as occ shows it. */
+export interface QueuedJob {
+  id: string
+  argument: string
+}
+
+/** The app's queued background jobs of one kind, such as `SourceEventsJob`. */
+export function queuedJobs(kind: string): QueuedJob[] {
+  return occ('background:queue:status')
+    .split('\n')
+    .map((line) => line.split('|').map((cell) => cell.trim()))
+    .filter((cells) => cells[2] === `OCA\\OcoSynaplan\\BackgroundJob\\${kind}`)
+    .map((cells) => ({ id: cells[1], argument: cells[3] }))
+}
+
+/** Run one queued background job now, as cron would. */
+export function runJob(job: QueuedJob): void {
+  occ('background:queue:execute', '--accept-warning', '--force', job.id)
+}
+
+/** A source event waiting in a person's queue for Synaplan (lib/Service/SourceEventQueue.php). */
+export interface QueuedEvent {
+  fileId: string
+  event: string
+  version: string
+  path: string
+  step: string
+  attempts: number
+}
+
+/**
+ * A person's source events waiting to be sent, oldest first, from the dev
+ * stack's database: no occ command shows them.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function queuedEvents(uid: string): QueuedEvent[] {
+  const script = [
+    'require "lib/base.php";',
+    '$qb = \\OC::$server->getDatabaseConnection()->getQueryBuilder();',
+    '$qb->select("*")->from("synaplan_source_events")',
+    '->where($qb->expr()->eq("uid", $qb->createNamedParameter($argv[1])))',
+    '->orderBy("ord", "ASC")->addOrderBy("seq", "ASC");',
+    'echo json_encode($qb->execute()->fetchAllAssociative());',
+  ].join(' ')
+  const run = spawnSync('docker', ['exec', '-u', 'www-data', OCO_CONTAINER, 'php', '-r', script, '--', uid], {
+    encoding: 'utf8',
+  })
+  if (run.status !== 0) {
+    throw new Error(`Could not read the source events of ${uid} in ${OCO_CONTAINER}. ${run.stderr || run.stdout}`)
+  }
+  const rows = JSON.parse(run.stdout.slice(run.stdout.indexOf('['))) as Record<string, string | null>[]
+  return rows.map((row) => ({
+    fileId: String(row.file_id),
+    event: String(row.event),
+    version: row.version ?? '',
+    path: row.path ?? '',
+    step: String(row.step),
+    attempts: Number(row.attempts),
+  }))
+}
+
+/**
+ * Run a person's source events job now, as cron would: it tells Synaplan of
+ * what is due in their queue.
+ *
+ * @param uid ownCloud.online user id
+ */
+export function runSourceEvents(uid: string): void {
+  const job = queuedJobs('SourceEventsJob').find((queued) => queued.argument === JSON.stringify({ uid }))
+  if (job === undefined) {
+    throw new Error(`No source events job of ${uid} waits in ${OCO_CONTAINER}.`)
+  }
+  runJob(job)
+}
+
+/**
+ * Run every source events job in the list once, as cron's next run would.
+ * No one's event goes out while an older one of someone else has yet to
+ * reach the people it is shared with, so a journey that pauses cron starts
+ * with this: an event an earlier test left would hold back its own.
+ */
+export function runAllSourceEvents(): void {
+  queuedJobs('SourceEventsJob').forEach(runJob)
+}
+
+/**
+ * Run `act` while the app sends what it asks of Synaplan to a closed port,
+ * as when Synaplan cannot be reached, and give the app its address back.
+ */
+export async function withSynaplanUnreachable<T>(act: () => Promise<T>): Promise<T> {
+  const keys = ['synaplan_url', 'synaplan_url_local']
+  // occ can print notices before its answer, such as one about PCNTL.
+  const listed = occ('config:list', 'oco_synaplan')
+  const settings = (JSON.parse(listed.slice(listed.indexOf('{'))) as { apps?: Record<string, Record<string, unknown>> })
+    .apps?.oco_synaplan
+  const saved = keys.map((key) => (typeof settings?.[key] === 'string' ? (settings[key] as string) : null))
+  for (const key of keys) {
+    occ('config:app:set', 'oco_synaplan', key, '--value', 'http://127.0.0.1:9')
+  }
+  try {
+    return await act()
+  } finally {
+    keys.forEach((key, i) => {
+      const value = saved[i]
+      if (value === null) {
+        occ('config:app:delete', 'oco_synaplan', key)
+      } else {
+        occ('config:app:set', 'oco_synaplan', key, '--value', value)
+      }
+    })
+  }
+}
+
+/** One Synaplan file made of an ownCloud.online file; `deletedAt` is 0 until Synaplan heard it went to the trash. */
+export interface SynaplanFileRow {
+  id: number
+  deletedAt: number
+}
+
+/**
+ * The Synaplan files made of one file of this ownCloud.online, from the
+ * test stack's database: Synaplan's API does not show when it heard a file
+ * went to the trash. Only rows of the instance this server registered as.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function synaplanFilesOf(instance: string, fileId: string): SynaplanFileRow[] {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  const rows = synaplanSql(
+    `SELECT CONCAT('rows:', COALESCE(GROUP_CONCAT(CONCAT(f.BID, '=', COALESCE(f.BSOURCEDELETEDAT, 0))
+      ORDER BY f.BID SEPARATOR ';'), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}'`,
+    /rows:(\S*)/,
+    `the Synaplan files of ${fileId}`,
+  )
+  return rows
+    .split(';')
+    .filter((pair) => pair !== '')
+    .map((pair) => {
+      const [id, deletedAt] = pair.split('=')
+      return { id: Number(id), deletedAt: Number(deletedAt) }
+    })
+}
+
+/**
+ * The path Synaplan keeps for one file of this ownCloud.online, as a move
+ * reported it, from the test stack's database; '' when none is kept. The
+ * path has no spaces in the journeys.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function synaplanPathOf(instance: string, fileId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  return synaplanSql(
+    `SELECT CONCAT('path:', COALESCE(MAX(f.BORIGINALNAME), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}'`,
+    /path:(\S*)/,
+    `the Synaplan path of ${fileId}`,
+  )
+}
+
+/**
+ * The Synaplan files made of one file of this ownCloud.online that Synaplan
+ * marks changed since it read them, from the test stack's database.
+ *
+ * @param instance this ownCloud.online's instance id at Synaplan
+ * @param fileId the file's id in ownCloud.online
+ */
+export function staleInSynaplan(instance: string, fileId: string): number[] {
+  if (!/^[A-Za-z0-9._-]+$/.test(instance) || !/^\d+$/.test(fileId)) {
+    throw new Error(`unexpected instance ${instance} or file ${fileId}`)
+  }
+  return synaplanSql(
+    `SELECT CONCAT('stale:', COALESCE(GROUP_CONCAT(f.BID ORDER BY f.BID SEPARATOR ','), '')) AS found
+    FROM BFILES f WHERE f.BSOURCEINSTANCE = '${instance}' AND f.BSOURCEID = '${fileId}' AND f.BSTALE = 1`,
+    /stale:(\S*)/,
+    `the changed Synaplan files of ${fileId}`,
+  )
+    .split(',')
+    .filter((id) => id !== '')
+    .map(Number)
+}
+
+/**
+ * Share a file or folder of one person with another person, as the share
+ * dialog does: with every permission unless `permissions` says otherwise.
+ *
+ * @param path below the owner's files
+ * @return the share's id
+ */
+export async function shareWith(owner: string, path: string, recipient: string, permissions = 31): Promise<string> {
+  const dav = await davAs(owner)
+  try {
+    const shared = await dav.post('/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json', {
+      headers: { 'OCS-APIREQUEST': 'true' },
+      form: { path: `/${path}`, shareType: '0', shareWith: recipient, permissions: String(permissions) },
+    })
+    const body = (await shared.json()) as {
+      ocs: { meta: { statuscode: number; message: string }; data: { id?: string | number } }
+    }
+    expect(
+      shared.ok() && body.ocs.meta.statuscode === 200,
+      `sharing ${path} with ${recipient}: ${body.ocs.meta.message}`,
+    ).toBe(true)
+    return String(body.ocs.data.id)
+  } finally {
+    await dav.dispose()
+  }
+}
+
+/** This ownCloud.online's instance id at Synaplan, from the admin settings. */
+export async function instanceId(): Promise<string> {
+  const admin = await ownCloudAs('admin')
+  try {
+    const settings = await admin.get(`${APP}/api/v1/settings`)
+    const { link_instance_id: instance } = (await settings.json()) as { link_instance_id?: string }
+    expect(instance, 'this ownCloud.online is registered with Synaplan').toBeTruthy()
+    return instance as string
+  } finally {
+    await admin.dispose()
+  }
+}
+
 /** Sign in on the ownCloud.online login page. */
 export async function logIn(page: Page, uid: string): Promise<void> {
   await page.goto('/index.php/login')
@@ -488,14 +772,14 @@ export async function activateAndSummarize(page: Page): Promise<Locator> {
 }
 
 /** Sign in on Synaplan's connect page and allow the link. */
-export async function allowOnSynaplan(page: Page): Promise<void> {
+export async function allowOnSynaplan(page: Page, account: SynaplanAccount = SYNAPLAN_PERSON): Promise<void> {
   await page.waitForURL(`${SYNAPLAN_URL}/**`)
   const email = page.getByTestId('input-email')
   const connect = page.getByTestId('btn-connect')
   await expect(email.or(connect)).toBeVisible()
   if (await email.isVisible()) {
-    await email.fill(SYNAPLAN_PERSON.email)
-    await page.getByTestId('input-password').fill(SYNAPLAN_PERSON.password)
+    await email.fill(account.email)
+    await page.getByTestId('input-password').fill(account.password)
     await page.getByTestId('btn-login').click()
   }
   await expect(connect).toBeVisible()
@@ -510,12 +794,12 @@ export function personalSection(page: Page): Locator {
   return page.locator('#synaplan-personal-settings')
 }
 
-/** Connect from the personal settings, as a person would. */
-export async function connectFromSettings(page: Page): Promise<void> {
+/** Connect from the personal settings, as a person would, to the Synaplan person's account unless told another. */
+export async function connectFromSettings(page: Page, account: SynaplanAccount = SYNAPLAN_PERSON): Promise<void> {
   await page.goto(PERSONAL_SETTINGS)
   await personalSection(page).getByRole('button', { name: 'Connect Synaplan' }).click()
-  await allowOnSynaplan(page)
-  await expect(personalSection(page).getByText(CONNECTED)).toBeVisible()
+  await allowOnSynaplan(page, account)
+  await expect(personalSection(page).getByText(`Connected as ${account.email}`)).toBeVisible()
 }
 
 /** Connect unless the personal settings already say "Connected as …". */

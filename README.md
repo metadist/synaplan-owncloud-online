@@ -11,7 +11,16 @@ talks to the **Synaplan backend API**.
 - **Translate** — translate files to another language from the context menu.
 - **Make searchable by AI** — send a file to Synaplan so the AI can find it
   when you ask a question; pick the knowledge folder, update it after the file
-  changes, or remove it again.
+  changes, or remove it again. With **Keep it up to date** (on by default)
+  Synaplan takes each new version of the file by itself.
+- **What Synaplan made of a file** — a bird after the name of each file
+  Synaplan holds says whether the AI can search it, is still adding it or is
+  taking a new version; while Synaplan is at work on it, the bird asks again
+  a few times, later each time, as long as the folder is open. It opens the
+  file's **Synaplan** tab in the details
+  view: who owns it, who else can use it, what it touches and where it came
+  from, with **Remove from Synaplan** and **Open in Synaplan**. The research
+  page lists the person's searchable files.
 - **Research Chat** — a full-page AI assistant **and** a floating in-page
   launcher, with knowledge-group and model selection, streaming answers, and
   optional personal memories. `/pic` and `/vid` generate images and videos when
@@ -137,9 +146,10 @@ one person names (1 to 500, default 20).
 The personal setting and **Let Synaplan read this folder** appear only while
 Synaplan offers folder reads, that is while its
 `/.well-known/synaplan-configuration` lists `pickups` and `read_scope`. The
-app keeps that answer for five minutes, or for one minute when Synaplan did
-not answer, so a change on Synaplan's side shows within that time. A saved
-setting stays while they are hidden.
+app keeps that answer for five minutes, so a change on Synaplan's side shows
+within that time. While Synaplan gives no answer, its last answer of the past
+day stands in, and the app asks again every minute. A saved setting stays
+while they are hidden.
 
 A read arrives as a signed notice like a copy. The app checks the person's
 setting again, lists the folder with their credential and uploads what
@@ -149,6 +159,59 @@ going through the folder takes longer. A named folder stays allowed when it
 is renamed or moved, and Synaplan is told its new path. Watching folders is
 not in this release yet, so *Only what I watch* lets Synaplan read nothing
 for now.
+
+### What Synaplan made of a file
+
+The bird, the **Synaplan** tab and the list on the research page appear only
+with a personal account (*Connect your Synaplan account* or *Accounts created
+by the administrator*) and while Synaplan's
+`/.well-known/synaplan-configuration` lists `cloud_status`. **Keep it up to
+date** also needs this server registered and `source_events` listed. A page
+asks Synaplan about the files it shows, up to 500 at a time, and keeps each
+answer for a minute or until that file changes. While Synaplan does not
+answer, no bird shows and the tab says "Couldn't check Synaplan right now".
+
+When a file changes, moves, goes to the trash or comes back from it, the app
+queues the event for the person it happened to, and for a shared file for its
+owner and for each person it is shared with who holds a Synaplan connection,
+at the path they see it at, so the copies they made follow too; for a
+deletion they are noted before the shares go, also those who have only a
+share of something inside a deleted folder. For a folder, the same goes
+for each file and folder inside it. Renaming a folder shared with you
+changes its path for you alone, so only your copies are told; renaming one
+you share changes no path of the people you share it with, so theirs are
+not. Removing a
+share from your files, or declining it, deletes your copies of what it
+held, except those you still reach through another share. The
+request reads no file below a folder, so a large one answers at once: the
+files inside a deleted or restored folder go into the queue from the file
+cache in one statement, and those of a moved folder are queued by the
+background job, 500 at a time, ahead of what happened after the move. Each
+person's background job tells Synaplan of their events with their own
+credential, in the order they happened, up to 100 to a call. Events Synaplan
+cannot take yet are tried again after 1, 5, 15 and 60 minutes, and given up
+after that; the person's later events wait for them, so a restore never
+reaches Synaplan before the deletion it undoes. A change someone else made
+earlier to a file shared with you reaches your copy before yours does. A path
+longer than Synaplan's 255 bytes is sent empty, and Synaplan keeps the name it
+has. When Synaplan keeps the file up to date, it
+asks for the new version, and another background job uploads it with that
+person's credential, in place of Synaplan's copy. An upload that fails for
+now, because Synaplan cannot be reached, is busy or sends an answer that
+cannot be read, or the person's access cannot be renewed just then, is tried
+again after 1, 5, 15 and 60 minutes.
+A file in the trash leaves
+the AI's search; restored, it comes back as the same file in Synaplan.
+
+Three gaps in Synaplan show here. The list on the research page shows no file
+yet: Synaplan's file list (`/api/v1/files`) does not say which file here each
+one came from. Synaplan asks the oldest account its person has here for a new
+version, ended accounts too, not the one whose file changed; when one
+Synaplan account is connected from two accounts here, the app uploads
+nothing for an account that is gone or cannot see the file. And Synaplan
+takes every change it hears of as a new version, even of the version it
+holds: a file saved shortly before it was made searchable reads as updating
+until Synaplan has taken it again, one or two background-job runs later.
 
 ## Development
 
@@ -269,7 +332,12 @@ the checkout's folder name, with the same container names. Stop it once with
 delete its data) before `make dev-up`.
 
 Journeys that need `occ` run it in `OCO_CONTAINER` (default
-`synaplan-owncloud-dev`).
+`synaplan-owncloud-dev`). The journey of a file's state in Synaplan pauses
+the cron container (`OCO_CRON_CONTAINER`, default
+`synaplan-owncloud-dev-cron`) and runs the app's background jobs itself, one
+at a time. The lifecycle journey connects the person it deletes to the
+Synaplan admin's account, so Ada's Synaplan account has no other account
+here.
 
 ### Test switches
 
@@ -279,11 +347,23 @@ App values the journeys set and the UI never shows. Each is off unless it is
 | Switch | When on |
 | --- | --- |
 | `dev_hold_inbound` | A copy from Synaplan is written, but its result waits: Synaplan shows it as still copying until the switch is deleted and the next cron run reports it |
+| `dev_mute_events` | The app does not tell Synaplan when a file changes, moves, goes to the trash or comes back, so Synaplan asks for no new version; a page still shows a changed file as out of date |
 
 ```bash
 make dev-occ CMD="config:app:set oco_synaplan dev_hold_inbound --value 1"
 make dev-occ CMD="config:app:delete oco_synaplan dev_hold_inbound"
 ```
+
+Two values tune watched folders for testing:
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `watch_quiet_seconds` | `60` | how long a file in a watched folder has to stay unchanged before it goes to Synaplan (0 to 3600) |
+| `watch_reconcile_minutes` | `60` | how often the app looks through watched folders for files it missed (15 to 1440) |
+
+The dev stack mounts the checkout, so a migration or background job added
+without a version bump is not installed by itself. `make dev-up` and every
+journey run apply them; `make dev-migrate` does it by hand.
 
 ### Local ownCloud.online stack
 
@@ -336,11 +416,13 @@ install sets the address Synaplan uses to reach it to
 `http://localhost:8083` (`overwrite.cli.url`). Every start sets
 `memcache.local` to APCu.
 
-ownCloud.online adds an app's background jobs when it installs or upgrades
-the app, not on `app:enable`. A dev stack installed with an older version of
-the app gets new jobs with fresh volumes (`make dev-reset dev-up`) or with
+ownCloud.online adds an app's background jobs and creates its tables (the
+migrations in `appinfo/Migrations`) when it installs or upgrades the app, not
+on `app:enable`. A dev stack installed with an older version of the app gets
+them with fresh volumes (`make dev-reset dev-up`) or with
 `make dev-occ CMD="config:app:set oco_synaplan installed_version --value 0"`
-followed by `make dev-occ CMD="upgrade"`.
+followed by `make dev-occ CMD="upgrade"`; for the tables alone,
+`make dev-occ CMD="migrations:migrate oco_synaplan"`.
 
 The frontend is built as self-contained IIFE bundles (Vue 3 bundled) because
 ownCloud.online loads app scripts as classic `<script>` tags. Entry points:

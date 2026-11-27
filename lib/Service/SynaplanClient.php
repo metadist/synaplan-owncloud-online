@@ -13,7 +13,9 @@ namespace OCA\OcoSynaplan\Service;
 
 use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Exception\FailureException;
+use OCA\OcoSynaplan\Exception\SynaplanHttpException;
 use OCA\OcoSynaplan\Http\Failure;
+use OCA\OcoSynaplan\Http\PatchingClient;
 use OCP\AppFramework\Http;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
@@ -277,6 +279,53 @@ class SynaplanClient
     }
 
     /**
+     * Tasks, shortcuts, knowledge folders and languages for the watch dialog.
+     *
+     * @return array<string, mixed>
+     * @throws \Exception on API error
+     */
+    public function watchOptions(): array
+    {
+        return $this->request('GET', '/api/v1/cloud/watches/options');
+    }
+
+    /**
+     * Start watching a folder or a file.
+     *
+     * @param array{target_kind: string, target_id: string, target_path: string, preset: string, task_id?: int|null, group_key?: string} $body
+     * @return array<string, mixed>
+     * @throws \Exception on API error
+     */
+    public function startWatch(array $body): array
+    {
+        return $this->request('POST', '/api/v1/cloud/watches', $body);
+    }
+
+    /**
+     * Pause or resume one of this person's watches. Synaplan resumes only a
+     * watch its owner paused and answers 409 with the reason otherwise.
+     *
+     * @param 'paused'|'active' $state
+     * @return array<string, mixed> the watch
+     * @throws \Exception on API error
+     */
+    public function updateWatch(int $id, string $state): array
+    {
+        return $this->request('PATCH', '/api/v1/cloud/watches/' . $id, ['state' => $state]);
+    }
+
+    /**
+     * Stop one of this person's watches. Files and results stay.
+     *
+     * @return array<string, mixed> the watch
+     * @throws \Exception on API error
+     */
+    public function stopWatch(int $id): array
+    {
+        return $this->request('DELETE', '/api/v1/cloud/watches/' . $id);
+    }
+
+    /**
      * Get the extracted text content of an uploaded file.
      *
      * @param int $fileId Synaplan file ID (returned from uploadFile)
@@ -355,6 +404,8 @@ class SynaplanClient
      *                                  (source, source_id) instead of creating a duplicate.
      * @param string|null $apiKey       A person's credential for work done while they are
      *                                  not signed in; null uses the current request's.
+     * @param bool|null   $keepSynced   Whether Synaplan asks for the file again when it
+     *                                  changes here; null leaves Synaplan's choice.
      * @return array<string, mixed>
      * @throws \Exception on API error
      */
@@ -368,6 +419,7 @@ class SynaplanClient
         ?string $sourceEtag = null,
         bool $overwrite = false,
         ?string $apiKey = null,
+        ?bool $keepSynced = null,
     ): array {
         $client = $this->clientService->newClient();
         $url = $this->getBaseUrl() . '/api/v1/files/upload';
@@ -404,6 +456,9 @@ class SynaplanClient
         }
         if ($overwrite) {
             $multipart[] = ['name' => 'overwrite', 'contents' => '1'];
+        }
+        if ($keepSynced !== null) {
+            $multipart[] = ['name' => 'keep_synced', 'contents' => $keepSynced ? '1' : '0'];
         }
 
         $options = [
@@ -503,17 +558,22 @@ class SynaplanClient
     }
 
     /**
-     * One page of the person's files in Synaplan, newest first.
+     * One page of the person's files in Synaplan, newest first: at most 100,
+     * of one source (`generated`, `owncloud`) when it is named.
      *
-     * @param array<string, scalar> $filters `source` (`generated`) and `search`
      * @return array<string, mixed>
      */
-    public function listRecentFiles(int $page = 1, array $filters = []): array
+    public function listRecentFiles(int $page = 1, string $source = '', string $search = '', int $limit = 50): array
     {
-        return $this->request('GET', '/api/v1/files', null, true, [
-            'page' => max(1, $page),
-            'limit' => 50,
-        ] + $filters);
+        $query = ['page' => max(1, $page), 'limit' => max(1, min(100, $limit))];
+        if ($source !== '') {
+            $query['source'] = $source;
+        }
+        if (trim($search) !== '') {
+            $query['search'] = trim($search);
+        }
+
+        return $this->request('GET', '/api/v1/files', null, true, $query);
     }
 
     /**
@@ -861,6 +921,9 @@ class SynaplanClient
      */
     private function isInsufficientScope(\Exception $e): bool
     {
+        if ($e instanceof SynaplanHttpException) {
+            return $e->status === Http::STATUS_FORBIDDEN && str_contains($e->body, '"insufficient_scope"');
+        }
         if ($e->getCode() !== Http::STATUS_FORBIDDEN || !method_exists($e, 'getResponse')) {
             return false;
         }
@@ -882,6 +945,7 @@ class SynaplanClient
             'POST' => $client->post($url, $options),
             'PUT' => $client->put($url, $options),
             'DELETE' => $client->delete($url, $options),
+            'PATCH' => $client instanceof PatchingClient ? $client->patch($url, $options) : throw new \InvalidArgumentException('This HTTP client cannot send PATCH'),
             default => throw new \InvalidArgumentException("Unsupported HTTP method: {$method}"),
         };
     }

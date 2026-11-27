@@ -29,6 +29,7 @@ class LibraryImport
         private SynaplanClient $client,
         private IRootFolder $rootFolder,
         private ILogger $logger,
+        private OwnWrites $ownWrites,
     ) {
     }
 
@@ -39,15 +40,11 @@ class LibraryImport
     public function list(int $page = 1, string $filter = 'generated', string $search = ''): array
     {
         $page = max(1, $page);
-        $filters = [];
-        if ($filter !== 'all') {
-            $filters['source'] = 'generated';
-        }
-        $search = trim($search);
-        if ($search !== '') {
-            $filters['search'] = mb_substr($search, 0, self::SEARCH_MAX_LENGTH);
-        }
-        $decoded = $this->client->listRecentFiles($page, $filters);
+        $decoded = $this->client->listRecentFiles(
+            $page,
+            $filter !== 'all' ? 'generated' : '',
+            mb_substr(trim($search), 0, self::SEARCH_MAX_LENGTH),
+        );
         $files = [];
         foreach (is_array($decoded['files'] ?? null) ? $decoded['files'] : [] as $row) {
             if (!is_array($row) || !isset($row['id'])) {
@@ -97,6 +94,7 @@ class LibraryImport
             ]);
             throw FailureException::fromWrite($e);
         }
+        $this->ownWrites->note($file, time());
 
         $relative = ltrim((string) ($userFolder->getRelativePath($file->getPath()) ?? $file->getName()), '/');
         $directory = dirname($relative);

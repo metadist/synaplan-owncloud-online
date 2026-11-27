@@ -2,9 +2,12 @@ parameters:
 	# Never lower the level; raise it once the next one passes without a baseline.
 	level: 6
 	paths:
+		- appinfo/Migrations
 		- lib
 		- tests
 	excludePaths:
 		# The server's signatures of private classes OCP refers to: read, not analysed.
 		analyse:
 			- tests/stubs
+	stubFiles:
+		- tests/stubs/phpstan/query-builder.stub
