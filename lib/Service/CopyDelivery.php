@@ -55,6 +55,7 @@ class CopyDelivery
         private IJobList $jobs,
         private ITimeFactory $time,
         private SynaplanConfig $synaplanConfig,
+        private OwnWrites $ownWrites,
     ) {
     }
 
@@ -231,11 +232,15 @@ class CopyDelivery
             $existing = $folder->get($name);
             if ($existing instanceof File && $this->wrote($uid, (int) $existing->getId())) {
                 $existing->putContent($bytes);
+                $this->ownWrites->note($existing, $this->time->getTime());
 
                 return $existing;
             }
         }
-        return SynaplanFolders::write($folder, $name, $bytes);
+        $file = SynaplanFolders::write($folder, $name, $bytes);
+        $this->ownWrites->note($file, $this->time->getTime());
+
+        return $file;
     }
 
     /**

@@ -13,6 +13,7 @@ use OCA\OcoSynaplan\Service\KeyStorage;
 use OCA\OcoSynaplan\Service\LanguageService;
 use OCA\OcoSynaplan\Service\LibraryImport;
 use OCA\OcoSynaplan\Service\OAuthClient;
+use OCA\OcoSynaplan\Service\OwnWrites;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanCredential;
 use OCA\OcoSynaplan\Service\UserAccountService;
@@ -211,6 +212,15 @@ final class SynaplanContractTest extends TestCase
         ], false));
     }
 
+    public function testWatchBodiesTheSpecLeavesOutAreChecked(): void
+    {
+        $contract = $this->contract();
+        self::assertNotSame([], $contract->violations('POST', '/api/v1/cloud/watches/5/reconcile', ['items' => [['id' => 7, 'version' => 'e1']]], false));
+        self::assertNotSame([], $contract->violations('POST', '/api/v1/cloud/watches/5/files', ['id' => '7', 'version' => 'e1', 'event' => 'changed'], true));
+        self::assertNotSame([], $contract->violations('POST', '/api/v1/cloud/watches/5/files', ['id' => '7', 'version' => 'e1'], true));
+        self::assertSame([], $contract->violations('POST', '/api/v1/cloud/watches/5/files', ['id' => '7', 'version' => 'e1', 'file' => ''], true));
+    }
+
     public function testAFinalParameterDoesNotMatchExtraSegments(): void
     {
         $contract = $this->contract();
@@ -283,6 +293,17 @@ final class SynaplanContractTest extends TestCase
             fn () => $client->searchMemoryContext('budget'),
             fn () => $client->getModels(),
             fn () => $client->getFileGroups(),
+            fn () => $client->watchOptions(),
+            fn () => $client->startWatch([
+                'target_kind' => 'folder',
+                'target_id' => '7',
+                'target_path' => 'Invoices',
+                'preset' => 'keep_searchable',
+                'group_key' => 'Invoices',
+            ]),
+            fn () => $client->updateWatch(5, 'paused'),
+            fn () => $client->updateWatch(5, 'active'),
+            fn () => $client->stopWatch(5),
             fn () => $client->getFileContent(42),
             fn () => $client->knowledgeStatus(7, 'etag-1'),
             fn () => $client->deleteKnowledgeFile(42),
@@ -291,7 +312,7 @@ final class SynaplanContractTest extends TestCase
             fn () => $client->listRecentFiles(1, SynaplanClient::SOURCE, '', 100),
             fn () => $client->generateMedia('A cat', 'image', 3),
             fn () => $client->downloadFile('/api/v1/files/uploads/7/cat.png'),
-            fn () => (new LibraryImport($client, $this->createStub(IRootFolder::class), $this->logger()))->list(2, 'generated', 'plan'),
+            fn () => (new LibraryImport($client, $this->createStub(IRootFolder::class), $this->logger(), $this->createStub(OwnWrites::class)))->list(2, 'generated', 'plan'),
             fn () => $client->downloadStoredFile(42, CopyDelivery::MAX_BYTES),
             fn () => $links->notificationTrust(),
             fn () => $links->claimDelivery('17', 'ada'),
@@ -320,6 +341,11 @@ final class SynaplanContractTest extends TestCase
                 'skipped' => [['id' => '8', 'name' => 'old.txt', 'reason' => 'changed_since_listing']],
             ]),
             fn () => $links->reportPickupResult('16', 'ada', ['status' => 'failed', 'error_code' => 'outside_scope']),
+            fn () => $links->listWatches('ada'),
+            fn () => $links->reconcileWatch('ada', 5, [['id' => '7', 'version' => 'etag-1']]),
+            fn () => $links->sendWatchFile('ada', 5, ['id' => '7', 'version' => 'etag-1', 'name' => 'notes.txt', 'path' => 'Invoices/notes.txt'], ['bytes' => 'hello', 'name' => 'notes.txt', 'mime' => 'text/plain']),
+            fn () => $links->sendWatchFile('ada', 5, ['id' => '7', 'version' => 'etag-1', 'name' => 'notes.txt', 'path' => 'Invoices/notes.txt', 'own_write' => '1'], null),
+            fn () => $links->sendWatchFile('ada', 5, ['id' => '3', 'version' => 'deleted-1700000000', 'event' => 'deleted'], null),
             fn () => $links->reportReadScope('ada', 'allowed', [['id' => '3', 'path' => 'Invoices']]),
             fn () => $this->cloudState()->status([['id' => '7', 'version' => 'etag-1'], ['id' => '8', 'version' => '']]),
             fn () => $this->cloudState()->detail(42),

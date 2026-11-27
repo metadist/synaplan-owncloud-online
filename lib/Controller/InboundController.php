@@ -20,6 +20,7 @@ use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SeenNotificationStore;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
 use OCA\OcoSynaplan\Service\UserAccountService;
+use OCA\OcoSynaplan\Service\WatchSync;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\JSONResponse;
@@ -50,6 +51,7 @@ class InboundController extends Controller
         private ICacheFactory $cacheFactory,
         private ITimeFactory $time,
         private ILogger $logger,
+        private WatchSync $watches,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
@@ -86,6 +88,7 @@ class InboundController extends Controller
             'delivery' => $this->delivered($this->copies->handle($id, $person)),
             'pickup' => $this->read($id, $person),
             'identity_revoked' => $this->revoked($person),
+            'watches_changed' => $this->watchesChanged($person),
             default => new JSONResponse([], Http::STATUS_NO_CONTENT),
         };
     }
@@ -155,9 +158,21 @@ class InboundController extends Controller
         return new JSONResponse(['state' => 'accepted'], Http::STATUS_ACCEPTED);
     }
 
+    /**
+     * The person's watches are listed again on the next cron run, with
+     * their own credential; the notice itself carries nothing to trust.
+     */
+    private function watchesChanged(string $person): JSONResponse
+    {
+        $this->watches->request($person);
+
+        return new JSONResponse([], Http::STATUS_NO_CONTENT);
+    }
+
     private function revoked(string $person): JSONResponse
     {
         $this->accounts->linkEnded($person);
+        $this->watches->request($person);
 
         return new JSONResponse([], Http::STATUS_NO_CONTENT);
     }

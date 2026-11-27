@@ -6,6 +6,7 @@ namespace OCA\OcoSynaplan\Tests\Unit\Service;
 
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\ReadScope;
+use OCA\OcoSynaplan\Service\WatchIndex;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\Locked;
 use OCP\Files\Folder;
@@ -55,6 +56,29 @@ final class ReadScopeTest extends TestCase
 
         self::assertFalse($scope->mayRead('ada', 'HR'), 'a named folder waits for "Also folders I allow"');
         self::assertFalse($scope->mayRead('ada', 'Incoming-DE'));
+    }
+
+    public function testWatchedAllowsTheFoldersThePersonWatchesAndNothingBelowOrBeside(): void
+    {
+        $this->folders = ['Incoming-DE' => 30, 'HR' => 9, 'Specs/brief.pdf' => 31];
+        $scope = $this->scope(watches: $this->watching());
+        $scope->save('ada', ReadScope::MODE_WATCHED, [['id' => '9', 'path' => 'HR']]);
+
+        self::assertTrue($scope->mayRead('ada', 'Incoming-DE'));
+        self::assertFalse($scope->mayRead('ada', 'Incoming-DE/2026'));
+        self::assertFalse($scope->mayRead('ada', 'HR'));
+        self::assertFalse($scope->mayRead('ada', 'Specs/brief.pdf'), 'a watched file opens no folder');
+    }
+
+    public function testAlsoFoldersIAllowReadsTheWatchedFoldersToo(): void
+    {
+        $this->folders = ['Incoming-DE' => 30, 'HR' => 9];
+        $scope = $this->scope(watches: $this->watching());
+        $scope->save('ada', ReadScope::MODE_ALLOWED, [['id' => '9', 'path' => 'HR']]);
+
+        self::assertTrue($scope->mayRead('ada', 'Incoming-DE'));
+        self::assertTrue($scope->mayRead('ada', 'HR/2026'));
+        self::assertFalse($scope->mayRead('ada', 'Incoming-DE/2026'));
     }
 
     public function testNothingAllowedMeansNothingMayBeRead(): void
@@ -521,7 +545,18 @@ final class ReadScopeTest extends TestCase
         self::assertSame('Archive/Invoices', $scope->get('ada')['folders'][0]['path']);
     }
 
-    private function scope(?ILockingProvider $locks = null): ReadScope
+    private function watching(): WatchIndex
+    {
+        $watches = $this->createStub(WatchIndex::class);
+        $watches->method('rowsOf')->willReturn([
+            ['id' => 5, 'uid' => 'ada', 'kind' => 'folder', 'target' => 30, 'state' => 'active', 'reason' => '', 'since' => 0, 'reconciled' => 0],
+            ['id' => 6, 'uid' => 'ada', 'kind' => 'file', 'target' => 31, 'state' => 'active', 'reason' => '', 'since' => 0, 'reconciled' => 0],
+        ]);
+
+        return $watches;
+    }
+
+    private function scope(?ILockingProvider $locks = null, ?WatchIndex $watches = null): ReadScope
     {
         $links = $this->createStub(PlatformLinkService::class);
         $links->method('reportReadScope')->willReturnCallback(
@@ -556,7 +591,7 @@ final class ReadScopeTest extends TestCase
         $root = $this->createStub(IRootFolder::class);
         $root->method('getUserFolder')->willReturn($userFolder);
 
-        return new ReadScope($this->config, $this->db(), $links, $root, $locks ?? $this->locks());
+        return new ReadScope($this->config, $this->db(), $links, $root, $locks ?? $this->locks(), $watches ?? new WatchIndex($this->db()));
     }
 
     /**

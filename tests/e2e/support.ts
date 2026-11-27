@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 
 export const OCO_URL = process.env.OCO_URL ?? 'http://localhost:8083'
 /** The ownCloud.online container of the dev stack (docker-compose.dev.yml). */
-const OCO_CONTAINER = process.env.OCO_CONTAINER ?? 'synaplan-owncloud-dev'
+export const OCO_CONTAINER = process.env.OCO_CONTAINER ?? 'synaplan-owncloud-dev'
 /** Only ever the Synaplan test stack: the journeys create keys and register this server there. */
 export const SYNAPLAN_URL = process.env.E2E_SYNAPLAN_URL ?? 'http://localhost:8001'
 export const APP = '/index.php/apps/oco_synaplan'
@@ -121,7 +121,7 @@ export async function resetPerson(uid: string): Promise<void> {
 }
 
 /** The Synaplan app container of the test stack, whose database the account cleanup reads. */
-const SYNAPLAN_CONTAINER = process.env.SYNAPLAN_APP_CONTAINER ?? 'synaplan-app-test'
+export const SYNAPLAN_CONTAINER = process.env.SYNAPLAN_APP_CONTAINER ?? 'synaplan-app-test'
 
 const OCO_HOST = new URL(OCO_URL).host
 if (!/^[a-z0-9.-]+(:\d+)?$/i.test(OCO_HOST)) {
@@ -138,7 +138,7 @@ const OURS = `p.BCLIENT = 'owncloud' AND p.BHOST = '${OCO_HOST}'`
  *
  * @param uid ownCloud.online user id
  */
-function ownIdentities(uid: string): string {
+export function ownIdentities(uid: string): string {
   if (!/^[a-z0-9._-]+$/i.test(uid)) {
     throw new Error(`unexpected uid ${uid}`)
   }
@@ -205,6 +205,31 @@ function synaplanSql(sql: string, found: RegExp, what: string): string {
     )
   }
   return match[1]
+}
+
+/**
+ * One value from the Synaplan test stack's database, '' when there is none;
+ * for what Synaplan's API shows only to the cloud a row belongs to. The
+ * value has no spaces.
+ *
+ * @param sql a query of one value
+ */
+export function synaplanValue(sql: string): string {
+  return synaplanSql(`SELECT CONCAT('value:', COALESCE((${sql}), '')) AS found`, /value:(\S*)/, 'a value')
+}
+
+/** Run SQL in the Synaplan test stack's database that returns nothing. */
+export function synaplanRun(sql: string): void {
+  const run = spawnSync(
+    'docker',
+    ['exec', SYNAPLAN_CONTAINER, 'php', 'bin/console', 'dbal:run-sql', sql.replace(/\s+/g, ' ')],
+    { encoding: 'utf8' },
+  )
+  if (run.status !== 0) {
+    throw new Error(
+      `Could not run SQL in ${SYNAPLAN_CONTAINER}; set SYNAPLAN_APP_CONTAINER. ${run.stderr || run.stdout}`,
+    )
+  }
 }
 
 /**
@@ -637,18 +662,18 @@ export function staleInSynaplan(instance: string, fileId: string): number[] {
 }
 
 /**
- * Share a file or folder of one person with another person, with every
- * permission, as the share dialog does.
+ * Share a file or folder of one person with another person, as the share
+ * dialog does: with every permission unless `permissions` says otherwise.
  *
  * @param path below the owner's files
  * @return the share's id
  */
-export async function shareWith(owner: string, path: string, recipient: string): Promise<string> {
+export async function shareWith(owner: string, path: string, recipient: string, permissions = 31): Promise<string> {
   const dav = await davAs(owner)
   try {
     const shared = await dav.post('/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json', {
       headers: { 'OCS-APIREQUEST': 'true' },
-      form: { path: `/${path}`, shareType: '0', shareWith: recipient, permissions: '31' },
+      form: { path: `/${path}`, shareType: '0', shareWith: recipient, permissions: String(permissions) },
     })
     const body = (await shared.json()) as {
       ocs: { meta: { statuscode: number; message: string }; data: { id?: string | number } }

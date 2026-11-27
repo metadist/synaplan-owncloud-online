@@ -170,6 +170,60 @@ describe('the state of the rows', () => {
   })
 })
 
+describe('the watches of the rows', () => {
+  const watch = { id: 4, target_id: '30', sentence: 'Synaplan keeps new files searchable.', state: 'active' }
+  const withWatches =
+    (watches: (typeof watch)[]) =>
+    (items: Array<{ id: string }>): Response =>
+      Response.json({ success: true, enabled: true, items: items.map(({ id }) => ({ id, state: 'none' })), watches })
+
+  it('keeps the watch an answer tells of, and drops one the next answer no longer has', async () => {
+    const { requestRowStatus, watchForTarget } = await batcher()
+    answer = withWatches([watch])
+    const first = requestRowStatus('30', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    expect((await first).watch).toEqual(watch)
+    expect(watchForTarget('30')).toEqual(watch)
+
+    answer = withWatches([])
+    const stopped = requestRowStatus('30', 'e2')
+    await vi.advanceTimersByTimeAsync(50)
+    expect((await stopped).watch).toBeNull()
+    expect(watchForTarget('30')).toBeNull()
+  })
+
+  it('keeps the watch of a folder the answer was not asked about', async () => {
+    const { requestRowStatus, watchForTarget } = await batcher()
+    answer = withWatches([watch])
+    const first = requestRowStatus('30', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    await first
+
+    answer = withWatches([])
+    const other = requestRowStatus('31', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    await other
+    expect(watchForTarget('30')).toEqual(watch)
+  })
+
+  it.each([
+    ['cannot be reached', { enabled: true, unreachable: true }],
+    ['has its cloud files off', { enabled: false }],
+  ])('keeps the watch while Synaplan %s, as such an answer lists none', async (_, state) => {
+    const { requestRowStatus, watchForTarget } = await batcher()
+    answer = withWatches([watch])
+    const first = requestRowStatus('30', 'e1')
+    await vi.advanceTimersByTimeAsync(50)
+    await first
+
+    answer = () => Response.json({ success: true, items: [], watches: [], ...state })
+    const later = requestRowStatus('30', 'e2')
+    await vi.advanceTimersByTimeAsync(50)
+    await later
+    expect(watchForTarget('30')).toEqual(watch)
+  })
+})
+
 describe('an answer asked for before the person changed what Synaplan holds', () => {
   const nothing = (): Response => Response.json({ success: true, enabled: true, items: [] })
 

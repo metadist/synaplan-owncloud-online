@@ -354,6 +354,17 @@ make dev-occ CMD="config:app:set oco_synaplan dev_hold_inbound --value 1"
 make dev-occ CMD="config:app:delete oco_synaplan dev_hold_inbound"
 ```
 
+Two values tune watched folders for testing:
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `watch_quiet_seconds` | `60` | how long a file in a watched folder has to stay unchanged before it goes to Synaplan (0 to 3600) |
+| `watch_reconcile_minutes` | `60` | how often the app looks through watched folders for files it missed (15 to 1440) |
+
+The dev stack mounts the checkout, so a migration or background job added
+without a version bump is not installed by itself. `make dev-up` and every
+journey run apply them; `make dev-migrate` does it by hand.
+
 ### Local ownCloud.online stack
 
 There is no official image of BW-Tech's ownCloud.online. The dev stack runs a

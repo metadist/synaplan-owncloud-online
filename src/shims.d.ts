@@ -57,6 +57,7 @@ interface OcGlobal {
   imagePath: (app: string, file: string) => string
   PERMISSION_READ: number
   PERMISSION_UPDATE: number
+  PERMISSION_CREATE: number
   Notification: {
     showTemporary: (text: string, options?: { timeout?: number; isHTML?: boolean; type?: string }) => unknown
     show: (text: string) => unknown
@@ -103,6 +104,12 @@ declare global {
     $fileList?: OcRows
     showDetailsView?: (fileName: string, tabId?: string) => void
     registerTabView?: (tabView: unknown) => void
+    /** The list's element; it tells of a folder change with `afterChangeDirectory`. */
+    $el?: { on: (event: string, handler: (event: { fileId?: number | string }) => void) => void }
+    /** The table of rows, as a jQuery set. */
+    $table?: ArrayLike<HTMLElement>
+    /** The folder that is open. */
+    dirInfo?: { id?: number | string; etag?: string; name?: string }
   }
 
   /** A file's details in the Files app's details view (OCA.Files.FileInfoModel). */

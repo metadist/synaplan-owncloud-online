@@ -1,6 +1,6 @@
 .PHONY: help deps build dev l10n lint lint-php lint-js format check-types typecheck ocp stan test test-php test-unit-js \
 	openapi test-contract contract-fixtures check-contract-fixtures ci-local clean package check-tarball \
-	link unlink dev-server dev-up dev-down dev-reset dev-occ dev-logs dev-shell e2e-up test-e2e e2e-down
+	link unlink dev-server dev-up dev-down dev-reset dev-migrate dev-occ dev-logs dev-shell e2e-up test-e2e e2e-down
 
 app_name := oco_synaplan
 # The BW-Tech ownCloud.online checkout and its tag (README "Development").
@@ -148,6 +148,9 @@ dev-down: docker-compose.dev.yml ## Stop local ownCloud.online (keeps the volume
 
 dev-reset: docker-compose.dev.yml ## Remove the config, data and database volumes — destroys local data
 	$(COMPOSE_DEV) down -v
+
+dev-migrate: docker-compose.dev.yml ## Apply the mounted app's pending migrations and background jobs without a version bump (dev-up does it too)
+	$(OCO_EXEC) sh /var/www/html/apps/$(app_name)/docker/dev-migrate.sh
 
 dev-occ: docker-compose.dev.yml ## Run occ in the dev container, e.g. make dev-occ CMD="user:list"
 	$(OCO_EXEC) php occ $(CMD)

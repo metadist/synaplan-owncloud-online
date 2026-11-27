@@ -8,6 +8,7 @@ use OCA\OcoSynaplan\Exception\FailureException;
 use OCA\OcoSynaplan\Http\Failure;
 use OCA\OcoSynaplan\Service\CopyDelivery;
 use OCA\OcoSynaplan\Service\LibraryImport;
+use OCA\OcoSynaplan\Service\OwnWrites;
 use OCA\OcoSynaplan\Tests\Unit\Support\BuildsServices;
 use OCA\OcoSynaplan\Tests\Unit\Support\RecordingHttp;
 use OCP\Files\File;
@@ -191,7 +192,7 @@ final class LibraryImportTest extends TestCase
         $root = $this->createStub(IRootFolder::class);
         $root->method('getUserFolder')->willReturn($this->userFolder);
 
-        return new LibraryImport($this->client(), $root, $this->logger());
+        return new LibraryImport($this->client(), $root, $this->logger(), $this->createStub(OwnWrites::class));
     }
 
     /**

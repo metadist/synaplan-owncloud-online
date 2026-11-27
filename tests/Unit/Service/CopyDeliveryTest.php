@@ -8,6 +8,7 @@ use OCA\OcoSynaplan\BackgroundJob\DeliveryResultJob;
 use OCA\OcoSynaplan\BackgroundJob\DeliveryRetryJob;
 use OCA\OcoSynaplan\Service\CopyDelivery;
 use OCA\OcoSynaplan\Service\Notices;
+use OCA\OcoSynaplan\Service\OwnWrites;
 use OCA\OcoSynaplan\Service\PersonFiles;
 use OCA\OcoSynaplan\Service\PlatformLinkService;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
@@ -376,6 +377,7 @@ final class CopyDeliveryTest extends TestCase
             $this->jobs,
             $time,
             $synaplanConfig,
+            $this->createStub(OwnWrites::class),
         );
     }
 }

@@ -15,6 +15,7 @@ use OCA\OcoSynaplan\AppInfo\Application;
 use OCA\OcoSynaplan\Service\CloudStateService;
 use OCA\OcoSynaplan\Service\SynaplanClient;
 use OCA\OcoSynaplan\Service\SynaplanConfig;
+use OCA\OcoSynaplan\Service\WatchPolicy;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\Files\File;
@@ -42,24 +43,27 @@ class CloudStatusController extends Controller
         private IRootFolder $rootFolder,
         private IUserSession $userSession,
         private IURLGenerator $urlGenerator,
+        private WatchPolicy $policy,
     ) {
         parent::__construct(Application::APP_ID, $request);
     }
 
     /**
-     * The state of up to 500 files of a folder view, each with the version it shows.
+     * The state of up to 500 files of a folder view, each with the version
+     * it shows, and the watches on them.
      *
      * @NoAdminRequired
      */
     public function status(): JSONResponse
     {
         $items = $this->readItems();
-        if ($items === [] || $this->userSession->getUser() === null || !$this->cloudState->available()) {
-            return new JSONResponse(['success' => true, 'enabled' => false, 'items' => []]);
+        $user = $this->userSession->getUser();
+        if ($items === [] || $user === null || !$this->cloudState->available()) {
+            return new JSONResponse(['success' => true, 'enabled' => false, 'items' => [], 'watches' => []]);
         }
         $answer = $this->cloudState->status($items);
         if (!$answer['enabled']) {
-            return new JSONResponse(['success' => true, 'enabled' => false, 'items' => []]);
+            return new JSONResponse(['success' => true, 'enabled' => false, 'items' => [], 'watches' => []]);
         }
 
         return new JSONResponse([
@@ -67,6 +71,7 @@ class CloudStatusController extends Controller
             'enabled' => true,
             'unreachable' => (bool) ($answer['unreachable'] ?? false),
             'items' => $answer['items'],
+            'watches' => $this->policy->markStopped($user->getUID(), $answer['watches']),
             'glyphs' => $this->cloudState->glyphOverrides(),
             'openSynaplanUrl' => $this->synaplanConfig->getPublicBaseUrl() . '/files',
         ]);
@@ -119,6 +124,7 @@ class CloudStatusController extends Controller
             'knowledgeFolder' => $folder !== null ? (string) ($folder['name'] ?? $folder['key'] ?? '') : null,
             'keptUpToDate' => (bool) ($item['kept_up_to_date'] ?? false),
             'synaplanFileId' => $synaplanFileId,
+            'watches' => $this->policy->markStopped($user->getUID(), $answer['watches']),
             'glyphs' => $this->cloudState->glyphOverrides(),
             'openSynaplanUrl' => $this->synaplanConfig->getPublicBaseUrl() . '/files',
         ]);

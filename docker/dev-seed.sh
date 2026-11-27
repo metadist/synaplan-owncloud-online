@@ -1,7 +1,8 @@
 #!/bin/sh
 # Runs on every `make dev-up`, as www-data inside the ownCloud.online container
-# once Apache answers. Safe to repeat: gives Ada the folders and shares the
-# cloud journeys use (the same as the Nextcloud dev stack).
+# once Apache answers. Safe to repeat: brings the app's tables and background
+# jobs up to the checkout (dev-migrate.sh) and gives Ada the folders and
+# shares the cloud journeys use (the same as the Nextcloud dev stack).
 set -eu
 
 ADA=ada:ada-dev-pass
@@ -13,6 +14,8 @@ if ! curl -fs -o /dev/null -u "$ADA" -X PROPFIND -H 'Depth: 0' "$DAV/"; then
 	echo "'make dev-reset dev-up' deletes the local ownCloud.online data and installs it." >&2
 	exit 1
 fi
+
+sh "$(dirname "$0")/dev-migrate.sh"
 
 for folder in Specs Incoming-DE Incoming-EN Reports Invoices Exports Projects Projects/Q3 HR HR/Contracts; do
 	code=$(curl -s -o /dev/null -w '%{http_code}' -u "$ADA" -X MKCOL "$DAV/$folder")

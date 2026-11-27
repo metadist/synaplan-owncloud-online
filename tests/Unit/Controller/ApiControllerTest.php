@@ -49,9 +49,51 @@ final class ApiControllerTest extends TestCase
         $this->synaplanOffers($types, ['deliveries', 'pickups', 'read_scope']);
 
         self::assertSame(
-            ['translation' => $translation, 'read_folders' => true, 'file_state' => false, 'follows_changes' => false],
+            ['translation' => $translation, 'read_folders' => true, 'file_state' => false, 'follows_changes' => false, 'watches' => false, 'watch_shared' => false],
             $this->controller()->features()->getData(),
         );
+    }
+
+    public function testWatchingIsOfferedWhereSynaplanWatchesAndTheAdministratorAllowsIt(): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', 'link');
+        $this->register();
+        $this->synaplanOffers([], ['deliveries', 'cloud_status', 'watches']);
+        $features = fn (): array => array_intersect_key($this->controller()->features()->getData(), ['watches' => 0, 'watch_shared' => 0]);
+
+        self::assertSame(['watches' => true, 'watch_shared' => true], $features());
+
+        $this->config->setAppValue('oco_synaplan', 'watch_shared_folders', 'no');
+        self::assertSame(['watches' => true, 'watch_shared' => false], $features());
+
+        $this->config->setAppValue('oco_synaplan', 'watch_shared_folders', 'yes');
+        $this->config->setAppValue('oco_synaplan', 'watch_folders', 'no');
+        self::assertSame(['watches' => false, 'watch_shared' => false], $features());
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function serversThatCannotFeedAWatch(): array
+    {
+        return [
+            'one shared account' => ['shared', true],
+            'not registered with Synaplan' => ['link', false],
+        ];
+    }
+
+    #[DataProvider('serversThatCannotFeedAWatch')]
+    public function testWatchingIsNotOfferedWhereNoFileCouldBeSentToTheWatch(string $mode, bool $registered): void
+    {
+        $this->config->setAppValue('oco_synaplan', 'mode', $mode);
+        if ($registered) {
+            $this->register();
+        }
+        $this->synaplanOffers([], ['deliveries', 'cloud_status', 'watches']);
+
+        $features = $this->controller()->features()->getData();
+        self::assertFalse($features['watches']);
+        self::assertFalse($features['watch_shared']);
     }
 
     /**
@@ -253,6 +295,7 @@ final class ApiControllerTest extends TestCase
             $this->readScope(),
             $this->links(),
             $this->cloudState(),
+            $this->synaplanConfig(),
         );
     }
 }

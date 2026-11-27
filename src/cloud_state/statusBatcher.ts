@@ -4,12 +4,14 @@
  * answer is kept for a minute per version of the file, unless Synaplan is
  * still at work on the file.
  */
-import { api, type CloudStatusItem, type GlyphOverrides } from '../shared/api'
+import { api, type CloudStatusItem, type CloudWatchSummary, type GlyphOverrides } from '../shared/api'
 
 export interface ResolvedRowStatus {
   enabled: boolean
   unreachable: boolean
   item: CloudStatusItem | null
+  /** The watch on this folder or file, if it has one. */
+  watch: CloudWatchSummary | null
   glyphs: GlyphOverrides
   openSynaplanUrl: string
 }
@@ -27,6 +29,7 @@ interface Pending {
 }
 
 const cache = new Map<string, { expiresAt: number; value: ResolvedRowStatus }>()
+const watches = new Map<string, CloudWatchSummary>()
 const pending = new Map<string, Pending>()
 const listeners = new Set<() => void>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -69,6 +72,7 @@ export function onCloudStatusInvalidated(listener: () => void): () => void {
 export function invalidateCloudStatusCache(): void {
   generation++
   cache.clear()
+  watches.clear()
   featureEnabled = null
   listeners.forEach((listener) => listener())
 }
@@ -78,10 +82,15 @@ export function isCloudStatusEnabled(): boolean | null {
   return featureEnabled
 }
 
+/** The last watch Synaplan told of on a folder or file, if any. */
+export function watchForTarget(targetId: string): CloudWatchSummary | null {
+  return watches.get(targetId) ?? null
+}
+
 /** The state of one file in the version the row shows. */
 export function requestRowStatus(id: string, version: string): Promise<ResolvedRowStatus> {
   if (featureEnabled === false) {
-    return Promise.resolve(rowStatus(false, false, null))
+    return Promise.resolve(rowStatus(false, false, null, null))
   }
   const key = cacheKey(id, version)
   const hit = cache.get(key)
@@ -99,8 +108,13 @@ export function requestRowStatus(id: string, version: string): Promise<ResolvedR
   })
 }
 
-function rowStatus(enabled: boolean, unreachable: boolean, item: CloudStatusItem | null): ResolvedRowStatus {
-  return { enabled, unreachable, item, glyphs: lastGlyphs, openSynaplanUrl: lastOpenSynaplanUrl }
+function rowStatus(
+  enabled: boolean,
+  unreachable: boolean,
+  item: CloudStatusItem | null,
+  watch: CloudWatchSummary | null,
+): ResolvedRowStatus {
+  return { enabled, unreachable, item, watch, glyphs: lastGlyphs, openSynaplanUrl: lastOpenSynaplanUrl }
 }
 
 async function flush(): Promise<void> {
@@ -131,9 +145,21 @@ async function flush(): Promise<void> {
           byId.set(item.id, item)
         }
       }
+      const told = new Map<string, CloudWatchSummary>()
+      for (const watch of Array.isArray(answer?.watches) ? answer.watches : []) {
+        if (watch && typeof watch.target_id === 'string') {
+          told.set(watch.target_id, watch)
+        }
+      }
+      if (enabled && !unreachable) {
+        for (const entry of slice) {
+          watches.delete(entry.id)
+        }
+        told.forEach((watch, targetId) => watches.set(targetId, watch))
+      }
       const expiresAt = Date.now() + CACHE_TTL_MS
       for (const entry of slice) {
-        const status = rowStatus(enabled, unreachable, byId.get(entry.id) ?? null)
+        const status = rowStatus(enabled, unreachable, byId.get(entry.id) ?? null, told.get(entry.id) ?? null)
         if (enabled && settled(status)) {
           cache.set(cacheKey(entry.id, entry.version), { expiresAt, value: status })
         }
@@ -145,7 +171,7 @@ async function flush(): Promise<void> {
         continue
       }
       for (const entry of slice) {
-        const status = rowStatus(featureEnabled ?? false, true, null)
+        const status = rowStatus(featureEnabled ?? false, true, null, null)
         entry.resolvers.forEach((resolve) => resolve(status))
       }
     }
