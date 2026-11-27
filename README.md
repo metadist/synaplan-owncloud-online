@@ -280,24 +280,30 @@ run on one machine at the same time, against one Synaplan test stack:
 Each Compose project has its own default network and project-named volumes.
 The Synaplan test stack has fixed container names and host ports, so only one
 runs: whichever repo starts it owns it, and `make e2e-up` in the other repo
-finds it at `E2E_SYNAPLAN_URL` and uses it. The two e2e overlays set the same
-environment apart from the registration token, and registration is `open`,
-so each app registers its own client either way. Each suite touches only
-what its own server made in Synaplan: the links of its client, host and
-person, and the account it provisions for Carol (here `carol.oco@example.org`).
+finds it at `E2E_SYNAPLAN_URL` and uses it. The repo that starts it also
+sets its image, the Synaplan pinned in that repo's `ci.yml`
+(`SYNAPLAN_IMAGE_DIGEST`), so run the two `make e2e-up` one after the other,
+the Nextcloud repo's first to test against its pin. The two e2e overlays set
+the same environment apart from the registration token, and registration is
+`open`, so each app registers its own client either way. Each suite touches
+only what its own server made in Synaplan: the links of its client, host and
+person, and the account it provisions for Carol (here
+`carol.oco@example.org`).
 
 ```bash
-make e2e-up                         # starts the Synaplan test stack, or uses the one that answers on :8001
-make test-e2e                       # meanwhile `make e2e-up test-e2e` in ../synaplan-nextcloud
-E2E_KEEP_SYNAPLAN=1 make e2e-down   # resets ownCloud.online and leaves the shared Synaplan running
+(cd ../synaplan-nextcloud && make e2e-up)  # the Synaplan test stack on :8001 with Nextcloud's pin, Nextcloud on :8091
+export OCO_TAG=v11.0.29                    # when ../owncloud.online is not at v11.0.10 (Local ownCloud.online stack)
+make e2e-up                                # "A Synaplan test stack already answers …: using it."
+make test-e2e                              # meanwhile `make test-e2e` in ../synaplan-nextcloud
 ```
 
-`make e2e-down` without `E2E_KEEP_SYNAPLAN=1` also removes the Synaplan test
-stack when this repo started it; a stack the other repo started is left
-alone, as Compose only removes its own project. The registration token is
-single-use, so on a kept stack the journeys register this server again
-without it. Synaplan allows a registered client 30 updates an hour, and each
-saved admin setting is one, so the global setup clears those counters in the
+Tear down with `make e2e-down` in both repos, in either order: the repo that
+started the Synaplan test stack removes it, the other leaves it running, as
+Compose only removes its own project. `make e2e-up` reuses a dev stack
+installed against another Synaplan or another version as it is; run
+`make dev-reset` first. The registration token is single-use, so on a kept
+stack the journeys register this server again without it. Synaplan allows a
+registered client 30 updates an hour, and each saved admin setting is one, so the global setup clears those counters in the
 test stack's Redis (`synaplan-redis-test`; `SYNAPLAN_REDIS_CONTAINER` names
 another) before each run. The provisioning journeys delete only Synaplan
 accounts this ownCloud.online created, whose every identity belongs to an
@@ -395,6 +401,10 @@ make dev-reset         # delete config, data and database; the checkout is untou
 
 OCO_TAG=v11.0.29 make dev-server dev-reset dev-up   # another version needs fresh volumes
 ```
+
+The container refuses a checkout at another version than `OCO_TAG`, so on a
+checkout not at `v11.0.10` set it for every later `make` call too, for
+example `export OCO_TAG=v11.0.29` in that shell.
 
 The first start runs `composer install --no-dev` in the checkout (a git
 checkout has no `lib/composer`), installs ownCloud.online, creates `admin` /
