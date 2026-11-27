@@ -41,6 +41,8 @@ final class FolderReadTest extends TestCase
     private int $privateTakes = 0;
     /** Whether Ada's files can be opened. */
     private bool $homeAway = false;
+    /** How often Invoices was listed. */
+    private int $invoicesListed = 0;
 
     protected function setUp(): void
     {
@@ -79,7 +81,11 @@ final class FolderReadTest extends TestCase
         $invoices->method('getId')->willReturn(30);
         $invoices->method('getPath')->willReturn('/ada/files/Invoices');
         $invoices->method('getName')->willReturn('Invoices');
-        $invoices->method('getDirectoryListing')->willReturnCallback(fn (): array => $this->listing);
+        $invoices->method('getDirectoryListing')->willReturnCallback(function (): array {
+            $this->invoicesListed++;
+
+            return $this->listing;
+        });
         $this->listing = [$file];
 
         $home = $this->createStub(Folder::class);
@@ -407,6 +413,84 @@ final class FolderReadTest extends TestCase
         $this->reads->finish('15', 'ada');
     }
 
+    public function testAFileThatTakesTheRestOfTheTimeToReadIsSentByTheJob(): void
+    {
+        $checks = 0;
+        $this->scope->method('mayRead')->willReturnCallback(function () use (&$checks): bool {
+            if (++$checks === 2) {
+                $this->now += FolderRead::BUDGET_SECONDS - 1;
+            }
+
+            return true;
+        });
+        $this->links->method('claimPickup')->willReturn($this->claim());
+        $this->links->method('submitPickupListing')->willReturn(['upload' => ['7'], 'reuse' => [], 'skip' => []]);
+        $uploadSeconds = [];
+        $this->links->method('uploadPickupFile')->willReturnCallback(
+            function (string $id, string $uid, string $remoteId, string $version, string $bytes, string $name, string $mime, int $seconds) use (&$uploadSeconds): array {
+                $uploadSeconds[] = $seconds;
+
+                return ['status_code' => 200];
+            },
+        );
+        $this->jobs->expects($this->once())->method('add')->with(PickupJob::class, ['id' => '15', 'uid' => 'ada']);
+
+        $this->reads->handle('15', 'ada');
+        self::assertSame([], $uploadSeconds);
+
+        $this->reads->finish('15', 'ada');
+        self::assertSame([120], $uploadSeconds);
+    }
+
+    public function testAResultTheRequestHasNoTimeLeftForIsSentByTheJob(): void
+    {
+        $this->scope->method('mayRead')->willReturn(true);
+        $this->links->method('claimPickup')->willReturn($this->claim());
+        $this->links->method('submitPickupListing')->willReturn(['upload' => ['7'], 'reuse' => [], 'skip' => []]);
+        $this->links->expects($this->once())->method('uploadPickupFile')->willReturnCallback(function (): array {
+            $this->now += FolderRead::BUDGET_SECONDS;
+
+            return ['status_code' => 200];
+        });
+        $reports = [];
+        $this->links->method('reportPickupResult')->willReturnCallback(
+            function (string $id, string $uid, array $body, int $seconds) use (&$reports): void {
+                $reports[] = [$body['status'], $body['sent'], $seconds];
+            },
+        );
+        $this->jobs->expects($this->once())->method('add')->with(PickupJob::class, ['id' => '15', 'uid' => 'ada']);
+
+        $this->reads->handle('15', 'ada');
+        self::assertSame([], $reports);
+
+        $this->reads->finish('15', 'ada');
+        self::assertSame([['done', 1, 30]], $reports);
+        self::assertSame([], $this->leftOver());
+    }
+
+    public function testARefusalTheRequestHasNoTimeLeftForIsSentByTheJob(): void
+    {
+        $this->scope->method('mayRead')->willReturn(false);
+        $this->links->method('claimPickup')->willReturnCallback(function (): array {
+            $this->now += FolderRead::BUDGET_SECONDS;
+
+            return $this->claim();
+        });
+        $reports = [];
+        $this->links->method('reportPickupResult')->willReturnCallback(
+            function (string $id, string $uid, array $body, int $seconds) use (&$reports): void {
+                $reports[] = [$body['error_code'] ?? '', $seconds];
+            },
+        );
+        $this->jobs->expects($this->once())->method('add')->with(PickupJob::class, ['id' => '15', 'uid' => 'ada']);
+
+        $this->reads->handle('15', 'ada');
+        self::assertSame([], $reports);
+
+        $this->reads->finish('15', 'ada');
+        self::assertSame([['outside_scope', 30]], $reports);
+    }
+
     public function testAQueuedFileThatBreaksIsSkippedAndTheRestIsStillSent(): void
     {
         $broken = $this->createStub(File::class);
@@ -482,6 +566,25 @@ final class FolderReadTest extends TestCase
         $this->reads->finish('15', 'ada');
         self::assertSame([], $this->leftOver());
         self::assertSame(1, $opened);
+    }
+
+    public function testAFolderIsNotListedOnceAClaimTookTheRequestsTime(): void
+    {
+        $this->scope->method('mayRead')->willReturn(true);
+        $this->links->method('claimPickup')->willReturnCallback(function (): array {
+            $this->now += FolderRead::BUDGET_SECONDS;
+
+            return $this->claim();
+        });
+        $this->links->expects($this->once())->method('submitPickupListing')->willReturn(['upload' => [], 'reuse' => [], 'skip' => []]);
+        $this->jobs->expects($this->once())->method('add')->with(PickupJob::class, ['id' => '15', 'uid' => 'ada']);
+
+        $this->reads->handle('15', 'ada');
+        self::assertSame(0, $this->invoicesListed);
+        self::assertCount(1, $this->leftOver());
+
+        $this->reads->finish('15', 'ada');
+        self::assertSame(1, $this->invoicesListed);
     }
 
     public function testNoListingCallOutlastsTheRequestAndTheJobListsAgain(): void

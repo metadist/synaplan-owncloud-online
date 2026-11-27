@@ -436,7 +436,7 @@ class PlatformLinkService
      *
      * @param array<string, mixed> $result
      */
-    public function reportPickupResult(string $id, string $uid, array $result): void
+    public function reportPickupResult(string $id, string $uid, array $result, int $timeoutSeconds = self::CALL_TIMEOUT): void
     {
         $this->request(
             'POST',
@@ -445,6 +445,7 @@ class PlatformLinkService
             array_merge($this->personHeaders($uid), ['Content-Type' => 'application/json']),
             false,
             true,
+            $timeoutSeconds,
         );
     }
 

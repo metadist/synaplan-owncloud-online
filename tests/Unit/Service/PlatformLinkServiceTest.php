@@ -142,6 +142,26 @@ final class PlatformLinkServiceTest extends TestCase
         self::assertSame('Bearer access-ada', $this->http->to('/api/v1/auth/me')[0]['options']['headers']['Authorization']);
     }
 
+    public function testAFolderReadsCallsKeepTheTimeTheyAreGiven(): void
+    {
+        $this->register();
+        $this->connect('ada', 'access-ada');
+        $this->http->answer(static fn (): array => ['status' => 'ok']);
+
+        $this->links()->claimPickup('15', 'ada', 12);
+        $this->links()->submitPickupListing('15', 'ada', [], 3);
+        $this->links()->reportPickupResult('15', 'ada', ['status' => 'done'], 4);
+
+        self::assertSame([12, 3, 4], array_map(
+            static fn (array $call): int => $call['options']['timeout'],
+            array_merge(
+                $this->http->to('/api/v1/platform-links/pickups/15/claim'),
+                $this->http->to('/api/v1/platform-links/pickups/15/listing'),
+                $this->http->to('/api/v1/platform-links/pickups/15/result'),
+            ),
+        ));
+    }
+
     public function testACopyIsClaimedFetchedAndReportedWithThePersonsOwnCredential(): void
     {
         $this->register();
