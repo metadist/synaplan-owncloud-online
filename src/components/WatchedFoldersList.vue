@@ -150,7 +150,8 @@ onMounted(() => void load())
   display: flex;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
+  /* Without a basis the actions never wrap and squeeze the text to a word. */
+  flex: 1 1 16rem;
   min-width: 0;
 }
 .synaplan-watched-name {
@@ -169,6 +170,7 @@ onMounted(() => void load())
 .synaplan-watched-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 .synaplan-watched-action {

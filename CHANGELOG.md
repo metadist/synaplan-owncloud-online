@@ -121,6 +121,10 @@ All notable changes to this project are documented here. The format is based on
   withdraw consent. Without a locking cache, ownCloud.online refuses lock names
   over 64 characters, and the lock that renews a connection was named with the
   whole user id.
+- The Watched folders list on the Synaplan page stays readable on a narrow
+  screen, such as a phone: Pause, Stop watching and Open folder move below the
+  text instead of cutting the folder's name and breaking its sentence after
+  every word.
 
 ## [1.0.0] - 2026-07-15
 

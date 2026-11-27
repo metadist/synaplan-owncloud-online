@@ -306,9 +306,19 @@ test('the owner pauses and resumes a watch in the Watched folders list, in the o
     watchId = await startWatch(person, folder.id)
     const stateOf = () => synaplanValue(`SELECT BSTATE FROM BCLOUDWATCHES WHERE BID=${watchId}`)
 
+    // A phone, where the list is as wide as the screen.
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 400, height: 800 })
     await page.goto(`${APP}/research`)
     const row = page.getByTestId('synaplan-watched-row').filter({ hasText: folder.name })
     await expect(row).toBeVisible()
+    expect(
+      await row.getByText(folder.name, { exact: true }).evaluate((name) => name.scrollWidth <= name.clientWidth),
+      'the folder name is shown in full',
+    ).toBe(true)
+    if (viewport) {
+      await page.setViewportSize(viewport)
+    }
     await expect(row.getByTestId('synaplan-watched-open')).toHaveAttribute('href', new RegExp(`/f/${folder.id}$`))
     await row.getByTestId('synaplan-watched-pause').click()
     await expect(row.getByTestId('synaplan-watched-resume')).toBeVisible()
